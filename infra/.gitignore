@@ -1,0 +1,15 @@
+*.js
+!jest.config.js
+*.d.ts
+node_modules
+dist
+cdk.out
+
+# Env con secretos
+.env
+.env.*
+!.env.example
+
+# Misc
+*.log
+.DS_Store

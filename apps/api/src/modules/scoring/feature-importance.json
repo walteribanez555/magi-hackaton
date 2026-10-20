@@ -1,0 +1,335 @@
+{
+  "$comment": "GENERADO por ml/train.py — tabla estática de importancia (gain) para top_factors. No editar.",
+  "model_version": "20261020-204244",
+  "trained_on": "synthetic",
+  "xgboost_version": "2.1.3",
+  "features": [
+    "accepted_added_lines",
+    "accepted_deleted_lines",
+    "files_count",
+    "importance_score",
+    "redundancy_score",
+    "mechanical_share",
+    "effective_lines",
+    "edited_before_accept_ratio",
+    "core_tier_share",
+    "test_tier_share",
+    "logic_kind_share",
+    "test_kind_share",
+    "tokens_total",
+    "tokens_per_effective_line",
+    "regenerations",
+    "latency_ms",
+    "session_acceptance_rate",
+    "has_task",
+    "task_is_bug",
+    "branch_is_default",
+    "hour_of_day"
+  ],
+  "models": {
+    "survival": {
+      "auc": 0.7227,
+      "features": [
+        {
+          "feature": "core_tier_share",
+          "gain": 0.318315,
+          "median": 0.5714,
+          "scale": 1.0,
+          "direction": "up"
+        },
+        {
+          "feature": "mechanical_share",
+          "gain": 0.106502,
+          "median": 0.2606,
+          "scale": 0.231875,
+          "direction": "down"
+        },
+        {
+          "feature": "importance_score",
+          "gain": 0.079639,
+          "median": 0.4856,
+          "scale": 0.326375,
+          "direction": "up"
+        },
+        {
+          "feature": "session_acceptance_rate",
+          "gain": 0.070852,
+          "median": 0.61705,
+          "scale": 0.312,
+          "direction": "up"
+        },
+        {
+          "feature": "redundancy_score",
+          "gain": 0.060444,
+          "median": 0.1256,
+          "scale": 0.1694,
+          "direction": "down"
+        },
+        {
+          "feature": "regenerations",
+          "gain": 0.048544,
+          "median": 0.0,
+          "scale": 1.0,
+          "direction": "down"
+        },
+        {
+          "feature": "has_task",
+          "gain": 0.035157,
+          "median": 1.0,
+          "scale": 1.0,
+          "direction": "up"
+        },
+        {
+          "feature": "accepted_added_lines",
+          "gain": 0.027564,
+          "median": 24.0,
+          "scale": 37.0,
+          "direction": "down"
+        },
+        {
+          "feature": "branch_is_default",
+          "gain": 0.026901,
+          "median": 0.0,
+          "scale": 1.0,
+          "direction": "up"
+        },
+        {
+          "feature": "logic_kind_share",
+          "gain": 0.026432,
+          "median": 0.26245,
+          "scale": 0.2944,
+          "direction": "up"
+        },
+        {
+          "feature": "edited_before_accept_ratio",
+          "gain": 0.023632,
+          "median": 0.0,
+          "scale": 0.181575,
+          "direction": "up"
+        },
+        {
+          "feature": "latency_ms",
+          "gain": 0.023587,
+          "median": 7176.5,
+          "scale": 7423.75,
+          "direction": "down"
+        },
+        {
+          "feature": "accepted_deleted_lines",
+          "gain": 0.019727,
+          "median": 0.0,
+          "scale": 4.0,
+          "direction": "down"
+        },
+        {
+          "feature": "tokens_total",
+          "gain": 0.019335,
+          "median": 4018.5,
+          "scale": 3780.75,
+          "direction": "down"
+        },
+        {
+          "feature": "test_kind_share",
+          "gain": 0.019007,
+          "median": 0.0099,
+          "scale": 0.1024,
+          "direction": "down"
+        },
+        {
+          "feature": "test_tier_share",
+          "gain": 0.017755,
+          "median": 0.0,
+          "scale": 0.112475,
+          "direction": "down"
+        },
+        {
+          "feature": "effective_lines",
+          "gain": 0.016839,
+          "median": 6.51,
+          "scale": 11.83,
+          "direction": "up"
+        },
+        {
+          "feature": "tokens_per_effective_line",
+          "gain": 0.016756,
+          "median": 639.945,
+          "scale": 1421.11,
+          "direction": "down"
+        },
+        {
+          "feature": "files_count",
+          "gain": 0.016159,
+          "median": 2.0,
+          "scale": 1.0,
+          "direction": "down"
+        },
+        {
+          "feature": "hour_of_day",
+          "gain": 0.013449,
+          "median": 12.0,
+          "scale": 5.0,
+          "direction": "down"
+        },
+        {
+          "feature": "task_is_bug",
+          "gain": 0.013403,
+          "median": 0.0,
+          "scale": 0.352262,
+          "direction": "up"
+        }
+      ]
+    },
+    "rework": {
+      "auc": 0.7026,
+      "features": [
+        {
+          "feature": "core_tier_share",
+          "gain": 0.156364,
+          "median": 0.5745,
+          "scale": 1.0,
+          "direction": "up"
+        },
+        {
+          "feature": "task_is_bug",
+          "gain": 0.126774,
+          "median": 0.0,
+          "scale": 0.358532,
+          "direction": "up"
+        },
+        {
+          "feature": "effective_lines",
+          "gain": 0.114632,
+          "median": 6.49,
+          "scale": 11.94,
+          "direction": "up"
+        },
+        {
+          "feature": "accepted_added_lines",
+          "gain": 0.073357,
+          "median": 24.0,
+          "scale": 37.0,
+          "direction": "up"
+        },
+        {
+          "feature": "test_tier_share",
+          "gain": 0.061587,
+          "median": 0.0,
+          "scale": 0.102825,
+          "direction": "down"
+        },
+        {
+          "feature": "session_acceptance_rate",
+          "gain": 0.058061,
+          "median": 0.6123,
+          "scale": 0.3133,
+          "direction": "down"
+        },
+        {
+          "feature": "regenerations",
+          "gain": 0.04479,
+          "median": 0.0,
+          "scale": 1.0,
+          "direction": "up"
+        },
+        {
+          "feature": "tokens_total",
+          "gain": 0.032191,
+          "median": 4056.0,
+          "scale": 3815.25,
+          "direction": "up"
+        },
+        {
+          "feature": "test_kind_share",
+          "gain": 0.03094,
+          "median": 0.0096,
+          "scale": 0.095975,
+          "direction": "down"
+        },
+        {
+          "feature": "redundancy_score",
+          "gain": 0.03027,
+          "median": 0.1246,
+          "scale": 0.1681,
+          "direction": "up"
+        },
+        {
+          "feature": "latency_ms",
+          "gain": 0.029889,
+          "median": 7161.0,
+          "scale": 7430.75,
+          "direction": "up"
+        },
+        {
+          "feature": "logic_kind_share",
+          "gain": 0.029818,
+          "median": 0.2631,
+          "scale": 0.2948,
+          "direction": "up"
+        },
+        {
+          "feature": "has_task",
+          "gain": 0.028701,
+          "median": 1.0,
+          "scale": 1.0,
+          "direction": "up"
+        },
+        {
+          "feature": "mechanical_share",
+          "gain": 0.026953,
+          "median": 0.2601,
+          "scale": 0.231575,
+          "direction": "down"
+        },
+        {
+          "feature": "importance_score",
+          "gain": 0.024731,
+          "median": 0.48385,
+          "scale": 0.328675,
+          "direction": "up"
+        },
+        {
+          "feature": "hour_of_day",
+          "gain": 0.024092,
+          "median": 12.0,
+          "scale": 5.0,
+          "direction": "down"
+        },
+        {
+          "feature": "accepted_deleted_lines",
+          "gain": 0.023406,
+          "median": 0.0,
+          "scale": 4.0,
+          "direction": "up"
+        },
+        {
+          "feature": "edited_before_accept_ratio",
+          "gain": 0.02333,
+          "median": 0.0,
+          "scale": 0.1783,
+          "direction": "down"
+        },
+        {
+          "feature": "tokens_per_effective_line",
+          "gain": 0.020874,
+          "median": 643.605,
+          "scale": 1461.6275,
+          "direction": "down"
+        },
+        {
+          "feature": "files_count",
+          "gain": 0.019827,
+          "median": 2.0,
+          "scale": 1.0,
+          "direction": "up"
+        },
+        {
+          "feature": "branch_is_default",
+          "gain": 0.01941,
+          "median": 0.0,
+          "scale": 1.0,
+          "direction": "up"
+        }
+      ]
+    }
+  }
+}

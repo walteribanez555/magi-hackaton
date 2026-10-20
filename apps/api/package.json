@@ -1,0 +1,34 @@
+{
+  "name": "@magicode/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "build:prod": "node esbuild.config.js --prod",
+    "dev": "tsx watch src/main.ts",
+    "start": "node --env-file-if-exists=.env dist/main.js",
+    "check-types": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "migrate": "tsx src/orm/migrate.ts up",
+    "migrate:down": "tsx src/orm/migrate.ts down",
+    "migrate:status": "tsx src/orm/migrate.ts status",
+    "migrations:gen": "node scripts/gen-migrations.js",
+    "create-table": "tsx ../../scripts/create-local-table.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.900.0",
+    "@aws-sdk/client-secrets-manager": "^3.900.0",
+    "@aws-sdk/lib-dynamodb": "^3.900.0",
+    "@magicode/contracts": "*",
+    "hono": "^4.13.0",
+    "pg": "^8.16.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.19.0",
+    "@types/aws-lambda": "^8.10.150",
+    "@types/pg": "^8.15.0",
+    "aws-sdk-client-mock": "^4.1.0"
+  }
+}

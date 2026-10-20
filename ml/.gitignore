@@ -1,0 +1,7 @@
+# Entorno local y artefactos de entrenamiento (se regeneran con `make train`)
+.venv/
+model/
+data/
+__pycache__/
+.pytest_cache/
+*.tar.gz

@@ -1,0 +1,61 @@
+{
+  "$comment": "GENERADO por ml/train.py desde ml/heuristic_weights.json. FUENTE DE VERDAD de los supuestos generativos (generate_synthetic.py) y de la heurística determinista de la API (scoring.heuristic.ts, 'heuristic:v1'). train.py copia este archivo a apps/api/src/modules/scoring/heuristic-weights.json. Términos: ver ml/heuristic.py → terms().",
+  "version": "heuristic:v1",
+  "terms": {
+    "redundancy_score": "dimensions.redundancy.score (0..1)",
+    "mechanical_share": "dimensions.automation.mechanical_share (0..1)",
+    "importance_score": "dimensions.importance.score (0..1)",
+    "core_tier_share": "% líneas en archivos tier core",
+    "test_tier_share": "% líneas en archivos tier test",
+    "logic_kind_share": "% líneas de kind logic",
+    "edited_before_accept_ratio": "% líneas editadas por el humano antes de aceptar",
+    "has_task": "1 si hay tarea Jira",
+    "task_is_bug": "1 si la tarea es Bug",
+    "branch_is_default": "1 si se trabaja directo en la rama default",
+    "acceptance_centered": "session_acceptance_rate − 0.6",
+    "log_added": "ln(1 + accepted_added_lines) − ln(21)  (0 en un cambio de 20 líneas)",
+    "log_regen": "ln(1 + regenerations)",
+    "large_untested_core": "core_tier_share × big × (1 − test_tier_share)²,  big = clamp01((ln(1+added) − ln(41)) / 1.5)",
+    "late_night": "1 si hour_of_day ≥ 22 o ≤ 5 (UTC)"
+  },
+  "survival": {
+    "intercept": 0.35,
+    "coef": {
+      "redundancy_score": -2.4,
+      "mechanical_share": -1.8,
+      "importance_score": 0.6,
+      "core_tier_share": 0.9,
+      "logic_kind_share": 0.9,
+      "edited_before_accept_ratio": 0.8,
+      "acceptance_centered": 1.5,
+      "has_task": 0.35,
+      "branch_is_default": 0.3,
+      "log_regen": -0.45,
+      "log_added": -0.15
+    }
+  },
+  "rework": {
+    "intercept": -2.3,
+    "coef": {
+      "core_tier_share": 0.6,
+      "logic_kind_share": 0.6,
+      "edited_before_accept_ratio": 0.5,
+      "log_added": 0.45,
+      "large_untested_core": 1.6,
+      "task_is_bug": 1.0,
+      "redundancy_score": 0.6,
+      "mechanical_share": -1.2,
+      "test_tier_share": -0.7,
+      "log_regen": 0.3,
+      "acceptance_centered": -1.0,
+      "late_night": 0.35
+    }
+  },
+  "criticality": {
+    "$comment": "criticality_score = rework_risk^0.7 × exposure^0.3 ; exposure = clamp01(0.5 × importance_score + 0.5 × tier_weight) ; tier_weight = Σ share(tier) × DEFAULT_TIER_WEIGHTS[tier]",
+    "rework_exponent": 0.7,
+    "exposure_exponent": 0.3,
+    "importance_weight": 0.5,
+    "tier_weight": 0.5
+  }
+}

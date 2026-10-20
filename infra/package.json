@@ -1,0 +1,33 @@
+{
+  "name": "magicode-infra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Infraestructura AWS CDK de MagiCode (NO es workspace del monorepo: lockfile propio).",
+  "bin": {
+    "infra": "bin/infra.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "check-types": "tsc --noEmit",
+    "test": "jest",
+    "cdk": "cdk",
+    "synth": "cdk synth -c environment=dev",
+    "diff": "cdk diff -c environment=dev"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.0",
+    "aws-cdk": "^2.1146.0",
+    "esbuild": "^0.28.2",
+    "jest": "^30.0.0",
+    "ts-jest": "^29.4.0",
+    "ts-node": "^10.9.2",
+    "typescript": "5.9.2"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.274.0",
+    "constructs": "^10.4.0",
+    "source-map-support": "^0.5.21"
+  }
+}

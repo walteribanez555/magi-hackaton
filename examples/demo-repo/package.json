@@ -1,0 +1,14 @@
+{
+  "name": "magicode-demo-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App semilla para la demo de MagiCode (repo Git independiente).",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.0"
+  }
+}

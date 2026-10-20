@@ -1,0 +1,9 @@
+{
+  "ref": "feature/MAG-130-checkout",
+  "ref_type": "branch",
+  "master_branch": "main",
+  "description": null,
+  "pusher_type": "user",
+  "repository": { "id": 1296269, "full_name": "acme/shop" },
+  "sender": { "login": "anadev", "type": "User" }
+}

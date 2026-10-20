@@ -1,0 +1,22 @@
+{
+  "action": "update",
+  "type": "Issue",
+  "createdAt": "2026-10-20T14:00:00.000Z",
+  "organizationId": "org_123",
+  "url": "https://linear.app/acme/issue/ENG-42/payments-retry",
+  "webhookTimestamp": 1760968800000,
+  "webhookId": "wh_123",
+  "data": {
+    "id": "9cfb482a-81e3-4154-b5b9-2c805e70a02d",
+    "identifier": "ENG-42",
+    "number": 42,
+    "title": "Payments retry",
+    "estimate": 3,
+    "updatedAt": "2026-10-20T14:00:00.000Z",
+    "url": "https://linear.app/acme/issue/ENG-42/payments-retry",
+    "state": { "id": "st_1", "name": "In Progress", "type": "started", "color": "#f2c94c" },
+    "assignee": { "id": "u_1", "name": "Ana Dev" },
+    "team": { "id": "t_1", "key": "ENG", "name": "Engineering" }
+  },
+  "updatedFrom": { "stateId": "st_0", "updatedAt": "2026-10-19T10:00:00.000Z" }
+}

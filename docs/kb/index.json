@@ -1,0 +1,447 @@
+[
+  {
+    "id": "inicio",
+    "title": "Guía de métricas de MagiCode",
+    "summary": "Índice de la guía, cómo leer cada artículo y convenciones de las cifras.",
+    "file": "README.md",
+    "metric_keys": [],
+    "tags": [
+      "indice",
+      "guia"
+    ]
+  },
+  {
+    "id": "embudo",
+    "title": "Embudo: etapas, aceptación, retención y supervivencia",
+    "summary": "Líneas IA por etapa (generado, aceptado, Git, versión de referencia, desplegado) y conversión entre etapas.",
+    "file": "embudo.md",
+    "metric_keys": [
+      "funnel[].stage",
+      "funnel[].lines",
+      "funnel[].conversion",
+      "counts.changes_proposed",
+      "counts.changes_accepted",
+      "counts.changes_rejected",
+      "counts.commits",
+      "counts.references",
+      "counts.deployments_success",
+      "ChangeListItem.status",
+      "ChangeListItem.accepted_added_lines",
+      "ChangeListItem.commit_sha",
+      "ChangeListItem.files",
+      "SessionListItem.accepted_lines",
+      "SessionListItem.commits",
+      "SessionListItem.highest_stage",
+      "TaskListItem.accepted_lines",
+      "TimelinePoint.accepted_lines",
+      "TimelinePoint.committed_lines",
+      "ChangeListItem.occurred_at"
+    ],
+    "tags": [
+      "embudo",
+      "aceptacion",
+      "retencion",
+      "supervivencia",
+      "git",
+      "despliegue",
+      "kpi"
+    ]
+  },
+  {
+    "id": "tokens",
+    "title": "Tokens consumidos y su desglose",
+    "summary": "Total medido por MagiHub para la key y la ventana, reconciliación y reparto entre aceptado, rechazado, regeneraciones y código mecánico.",
+    "file": "tokens.md",
+    "metric_keys": [
+      "tokens.total",
+      "tokens.reported_by_requests",
+      "tokens.unreconciled",
+      "tokens.on_accepted",
+      "tokens.on_rejected",
+      "tokens.on_redundant_regenerations",
+      "tokens.on_mechanical",
+      "tokens.cost_usd",
+      "counts.ai_requests",
+      "by_model[].model",
+      "by_model[].requests",
+      "by_model[].tokens",
+      "by_model[].accepted_lines",
+      "ChangeListItem.tokens",
+      "SessionListItem.tokens",
+      "SessionListItem.ai_requests",
+      "TaskListItem.tokens",
+      "TimelinePoint.tokens",
+      "TimelinePoint.tokens_provenance",
+      "TimelinePoint.bucket_start"
+    ],
+    "tags": [
+      "tokens",
+      "magihub",
+      "costo",
+      "reconciliacion",
+      "kpi"
+    ]
+  },
+  {
+    "id": "tokens-por-100-lineas",
+    "title": "Tokens por 100 líneas (y por 100 líneas efectivas)",
+    "summary": "Costo en tokens por cada 100 líneas que llegan a cada etapa; el KPI principal usa líneas efectivas.",
+    "file": "tokens-por-100-lineas.md",
+    "metric_keys": [
+      "funnel[].tokens_per_100_lines",
+      "funnel[].tokens_per_100_effective_lines"
+    ],
+    "tags": [
+      "tokens",
+      "kpi",
+      "eficiencia",
+      "embudo"
+    ]
+  },
+  {
+    "id": "lineas-efectivas",
+    "title": "Líneas efectivas",
+    "summary": "Líneas aceptadas ponderadas por importancia, sin redundantes ni mecánicas: el denominador honesto.",
+    "file": "lineas-efectivas.md",
+    "metric_keys": [
+      "funnel[].effective_lines",
+      "ChangeListItem.effective_lines",
+      "SessionListItem.effective_lines",
+      "TaskListItem.effective_lines",
+      "TimelinePoint.effective_lines"
+    ],
+    "tags": [
+      "lineas",
+      "aristas",
+      "kpi"
+    ]
+  },
+  {
+    "id": "importancia",
+    "title": "Importancia",
+    "summary": "Valor de cada línea aceptada según su clase (logic, test, config…) y el tier de su archivo.",
+    "file": "importancia.md",
+    "metric_keys": [
+      "dimensions.importance.score",
+      "dimensions.importance.by_kind",
+      "ChangeListItem.importance_score"
+    ],
+    "tags": [
+      "aristas",
+      "importancia",
+      "pesos",
+      "clasificacion"
+    ]
+  },
+  {
+    "id": "redundancia",
+    "title": "Redundancia",
+    "summary": "Líneas que no agregan nada nuevo (repetidas en el cambio, en la sesión o ya existentes en el repo) y regeneraciones redundantes.",
+    "file": "redundancia.md",
+    "metric_keys": [
+      "dimensions.redundancy.score",
+      "dimensions.redundancy.intra_change",
+      "dimensions.redundancy.existing_in_repo",
+      "dimensions.redundancy.repeated_in_session",
+      "dimensions.redundancy.redundant_regenerations",
+      "ChangeListItem.redundancy_score"
+    ],
+    "tags": [
+      "aristas",
+      "redundancia",
+      "duplicacion",
+      "regeneracion"
+    ]
+  },
+  {
+    "id": "automatizacion",
+    "title": "Automatización",
+    "summary": "Qué parte de lo aceptado era mecánico (automatizable sin LLM) y qué parte de cada commit vino de la IA.",
+    "file": "automatizacion.md",
+    "metric_keys": [
+      "dimensions.automation.mechanical_share",
+      "dimensions.automation.ai_share_of_commits",
+      "dimensions.automation.lost_before_commit",
+      "dimensions.automation.accepted_as_is",
+      "dimensions.automation.edited_before_accept",
+      "ChangeListItem.mechanical_share"
+    ],
+    "tags": [
+      "aristas",
+      "automatizacion",
+      "mecanico",
+      "commit",
+      "ai_share"
+    ]
+  },
+  {
+    "id": "puntuaciones-xgboost",
+    "title": "Puntuaciones (XGBoost): supervivencia y riesgo de retrabajo",
+    "summary": "Probabilidad de que un cambio llegue a la versión de referencia y de que requiera retrabajo; XGBoost en SageMaker Serverless con heurística de respaldo.",
+    "file": "puntuaciones-xgboost.md",
+    "metric_keys": [
+      "ChangeListItem.scores",
+      "ChangeListItem.scores.survival_probability",
+      "ChangeListItem.scores.rework_risk",
+      "ChangeListItem.scores.model_version",
+      "ChangeListItem.scores.provenance",
+      "ChangeListItem.scores.top_factors"
+    ],
+    "tags": [
+      "puntuaciones",
+      "xgboost",
+      "ml",
+      "sagemaker",
+      "supervivencia",
+      "retrabajo"
+    ]
+  },
+  {
+    "id": "criticidad",
+    "title": "Criticidad",
+    "summary": "Prioridad de revisión: riesgo de retrabajo combinado con la exposición del cambio, en niveles low, medium, high y critical.",
+    "file": "criticidad.md",
+    "metric_keys": [
+      "ChangeListItem.scores.criticality",
+      "ChangeListItem.scores.criticality_score"
+    ],
+    "tags": [
+      "criticidad",
+      "riesgo",
+      "revision",
+      "puntuaciones"
+    ]
+  },
+  {
+    "id": "pull-requests",
+    "title": "Pull requests",
+    "summary": "Total de PR, abiertos/fusionados/cerrados, PR con líneas IA, % IA por PR y lead time derivable.",
+    "file": "pull-requests.md",
+    "metric_keys": [
+      "counts.pull_requests",
+      "counts.pull_requests_merged",
+      "TaskListItem.pull_requests",
+      "PullRequestTotals.total",
+      "PullRequestTotals.open",
+      "PullRequestTotals.merged",
+      "PullRequestTotals.closed",
+      "PullRequestTotals.with_ai_lines",
+      "PullRequestListItem.state",
+      "PullRequestListItem.opened_at",
+      "PullRequestListItem.merged_at",
+      "PullRequestListItem.closed_at",
+      "PullRequestListItem.ai.commits",
+      "PullRequestListItem.ai.commits_with_ai",
+      "PullRequestListItem.ai.ai_matched_lines",
+      "PullRequestListItem.ai.commit_added_lines",
+      "PullRequestListItem.ai.contains_ai_lines"
+    ],
+    "tags": [
+      "pull-requests",
+      "git",
+      "revision",
+      "lead-time",
+      "webhooks"
+    ]
+  },
+  {
+    "id": "tareas-y-ramas",
+    "title": "Tareas y ramas",
+    "summary": "Cómo se enlazan las tareas Jira con ramas, sesiones, commits, PR y despliegues, y qué métricas tiene cada tarea y rama.",
+    "file": "tareas-y-ramas.md",
+    "metric_keys": [
+      "counts.tasks",
+      "counts.tasks_done",
+      "scope.task_key",
+      "scope.branch",
+      "TaskListItem.task_key",
+      "TaskListItem.title",
+      "TaskListItem.status",
+      "TaskListItem.status_category",
+      "TaskListItem.assignee",
+      "TaskListItem.story_points",
+      "TaskListItem.url",
+      "TaskListItem.branches",
+      "TaskListItem.sessions",
+      "TaskListItem.commits",
+      "TaskListItem.deployed",
+      "TaskListItem.updated_at",
+      "SessionListItem.branch",
+      "SessionListItem.task_key",
+      "ChangeListItem.branch",
+      "ChangeListItem.task_key",
+      "BranchListItem.task_keys",
+      "BranchListItem.sessions",
+      "BranchListItem.commits",
+      "BranchListItem.head_sha",
+      "BranchListItem.merged_into",
+      "BranchListItem.last_activity_at"
+    ],
+    "tags": [
+      "tareas",
+      "jira",
+      "ramas",
+      "multitenant"
+    ]
+  },
+  {
+    "id": "respuesta-a-tareas",
+    "title": "Respuesta a tareas (write-back a Jira)",
+    "summary": "Acciones de vuelta al gestor de tareas (transición, comentario, campos, enlaces, asignación) vía outbox, manuales o por reglas.",
+    "file": "respuesta-a-tareas.md",
+    "metric_keys": [
+      "task_actions",
+      "task_actions.status",
+      "task_actions.attempts",
+      "task_actions.last_error",
+      "task_actions.origin",
+      "task_actions.result",
+      "automation_rules",
+      "automation_rules.trigger",
+      "automation_rules.when",
+      "automation_rules.enabled"
+    ],
+    "tags": [
+      "jira",
+      "write-back",
+      "outbox",
+      "reglas",
+      "automatizacion-de-tareas",
+      "auditoria"
+    ]
+  },
+  {
+    "id": "webhooks",
+    "title": "Webhooks del repositorio y del gestor de tareas",
+    "summary": "Entregas firmadas de GitHub, Bitbucket y Jira: verificación, eventos soportados, normalización y respuestas.",
+    "file": "webhooks.md",
+    "metric_keys": [
+      "Integration.status",
+      "Integration.last_delivery_at",
+      "Integration.webhook_url",
+      "Integration.provider"
+    ],
+    "tags": [
+      "webhooks",
+      "github",
+      "bitbucket",
+      "jira",
+      "integraciones",
+      "seguridad"
+    ]
+  },
+  {
+    "id": "multitenant",
+    "title": "Multitenant y jerarquía de entidades",
+    "summary": "Tenant → proyecto → tarea → rama → sesión → cambio → commit → PR → despliegue: cómo se deriva y enlaza cada nivel.",
+    "file": "multitenant.md",
+    "metric_keys": [
+      "scope.tenant_id",
+      "scope.key_id",
+      "scope.project_id",
+      "scope.repository",
+      "scope.session_id",
+      "scope.from",
+      "scope.to",
+      "counts.sessions",
+      "SessionListItem.session_id",
+      "SessionListItem.project_id",
+      "SessionListItem.repository",
+      "SessionListItem.started_at",
+      "SessionListItem.ended_at",
+      "ChangeListItem.change_id",
+      "ChangeListItem.session_id",
+      "ChangeListItem.ai_request_id",
+      "TaskListItem.project_id",
+      "BranchListItem.repository",
+      "BranchListItem.branch"
+    ],
+    "tags": [
+      "multitenant",
+      "jerarquia",
+      "tenant",
+      "proyecto",
+      "sesion"
+    ]
+  },
+  {
+    "id": "procedencia-y-atribucion",
+    "title": "Procedencia y atribución",
+    "summary": "Etiquetas real / estimated / simulated de cada cifra y atribución exact / estimated entre tokens y cambios.",
+    "file": "procedencia-y-atribucion.md",
+    "metric_keys": [
+      "overall_provenance",
+      "attribution",
+      "Measured.value",
+      "Measured.provenance",
+      "Measured.source",
+      "Measured.note",
+      "generated_at"
+    ],
+    "tags": [
+      "procedencia",
+      "atribucion",
+      "honestidad",
+      "confianza"
+    ]
+  },
+  {
+    "id": "privacidad",
+    "title": "Privacidad y datos que se guardan",
+    "summary": "Qué sale del IDE (conteos, rutas, hashes) y qué nunca se guarda (código, prompts, API key).",
+    "file": "privacidad.md",
+    "metric_keys": [],
+    "tags": [
+      "privacidad",
+      "seguridad",
+      "hashes",
+      "datos"
+    ]
+  },
+  {
+    "id": "limitaciones",
+    "title": "Limitaciones declaradas",
+    "summary": "Lo que las métricas no garantizan y cómo afecta a cada número del dashboard.",
+    "file": "limitaciones.md",
+    "metric_keys": [],
+    "tags": [
+      "limitaciones",
+      "honestidad",
+      "confianza"
+    ]
+  },
+  {
+    "id": "ejemplo-demo-001",
+    "title": "Ejemplo de referencia: sesión demo-001 (MAG-123)",
+    "summary": "Todas las cifras del caso usado en la guía: tokens, cambios, aristas, commit, PR, referencia y resumen completo.",
+    "file": "ejemplo-demo-001.md",
+    "metric_keys": [],
+    "tags": [
+      "ejemplo",
+      "demo",
+      "referencia"
+    ]
+  },
+  {
+    "id": "glosario",
+    "title": "Glosario",
+    "summary": "Definiciones cortas de los términos del dashboard con enlace al artículo que los detalla.",
+    "file": "glosario.md",
+    "metric_keys": [],
+    "tags": [
+      "glosario",
+      "referencia"
+    ]
+  },
+  {
+    "id": "preguntas-frecuentes",
+    "title": "Preguntas frecuentes",
+    "summary": "Respuestas cortas a las dudas habituales al leer el dashboard.",
+    "file": "preguntas-frecuentes.md",
+    "metric_keys": [],
+    "tags": [
+      "faq",
+      "referencia"
+    ]
+  }
+]

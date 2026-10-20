@@ -1,0 +1,288 @@
+{
+  "name": "magicode",
+  "displayName": "MagiCode",
+  "description": "Asistente de código conectado a MagiHub Smart Auto, con telemetría de productividad.",
+  "version": "0.1.0",
+  "publisher": "magihub",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "main": "./dist/extension.js",
+  "categories": [
+    "AI",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "magihub",
+    "smart-auto",
+    "ai",
+    "productivity",
+    "telemetry"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "MagiCode",
+      "properties": {
+        "magicode.magihubBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:4010",
+          "markdownDescription": "Base URL de MagiHub (OpenAI-compatible). Toda la inferencia va a `{base}/v1/chat/completions` con `model: \"smart-auto\"`. Por defecto el mock local (`services/magihub-mock`), cuyos datos se etiquetan como **simulados**."
+        },
+        "magicode.telemetryUrl": {
+          "type": "string",
+          "default": "http://localhost:3000/api/v1",
+          "markdownDescription": "Base de la API de productividad MagiCode. Los eventos se envían a `{telemetryUrl}/productivity/events` (solo IDs, rutas, conteos y hashes)."
+        },
+        "magicode.dashboardUrl": {
+          "type": "string",
+          "default": "http://localhost:4200",
+          "description": "URL del dashboard MagiCode (comando Open Dashboard)."
+        },
+        "magicode.projectId": {
+          "type": "string",
+          "default": "",
+          "description": "ID de proyecto para la telemetría. Vacío = nombre del repositorio."
+        },
+        "magicode.repository": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Repositorio lógico (`org/repo`). Vacío = derivado de `git remote get-url origin` o del nombre de la carpeta."
+        },
+        "magicode.taskKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Tarea (Jira) por defecto, p. ej. `MAG-123`. Vacío = se infiere de la rama (`feature/MAG-123-…`). El comando **MagiCode: Set Task** tiene prioridad."
+        },
+        "magicode.addSessionTrailer": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Escribe `.git/magicode-session` para que el hook `prepare-commit-msg` (comando **Install Commit Trailer Hook**) agregue `MagiCode-Session: <id>` y `MagiCode-Task: <KEY>` a los commits."
+        },
+        "magicode.requestTimeoutSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 10,
+          "description": "Tiempo máximo de espera de una petición a Smart Auto."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "magicode.configureApiKey",
+        "title": "Configure API Key",
+        "category": "MagiCode",
+        "icon": "$(key)"
+      },
+      {
+        "command": "magicode.startSession",
+        "title": "Start Session",
+        "category": "MagiCode",
+        "icon": "$(play)"
+      },
+      {
+        "command": "magicode.endSession",
+        "title": "End Session",
+        "category": "MagiCode",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "magicode.generate",
+        "title": "Generate & Apply",
+        "category": "MagiCode",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "magicode.markReference",
+        "title": "Mark Reference Version",
+        "category": "MagiCode",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "magicode.installHook",
+        "title": "Install Commit Trailer Hook",
+        "category": "MagiCode"
+      },
+      {
+        "command": "magicode.showStats",
+        "title": "Show Session Stats",
+        "category": "MagiCode",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "magicode.openDashboard",
+        "title": "Open Dashboard",
+        "category": "MagiCode",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "magicode.setTask",
+        "title": "Set Task",
+        "category": "MagiCode",
+        "icon": "$(tasklist)"
+      },
+      {
+        "command": "magicode.showLog",
+        "title": "Show Log",
+        "category": "MagiCode",
+        "icon": "$(output)"
+      },
+      {
+        "command": "magicode.acceptEditedProposal",
+        "title": "Accept Edited Proposal",
+        "category": "MagiCode",
+        "icon": "$(check)",
+        "enablement": "magicode.editingProposal"
+      },
+      {
+        "command": "magicode.cancelEditedProposal",
+        "title": "Cancel Edited Proposal",
+        "category": "MagiCode",
+        "icon": "$(close)",
+        "enablement": "magicode.editingProposal"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "magicode.generate",
+        "key": "ctrl+alt+m",
+        "mac": "ctrl+alt+m",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "magicode.generate",
+          "group": "magicode@1",
+          "when": "resourceScheme == file"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "magicode.generate",
+          "when": "view == magicode.sessionView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "magicode.markReference",
+          "when": "view == magicode.sessionView && magicode.hasSession",
+          "group": "navigation@2"
+        },
+        {
+          "command": "magicode.openDashboard",
+          "when": "view == magicode.sessionView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "magicode.startSession",
+          "when": "view == magicode.sessionView",
+          "group": "1_session@1"
+        },
+        {
+          "command": "magicode.endSession",
+          "when": "view == magicode.sessionView && magicode.hasSession",
+          "group": "1_session@2"
+        },
+        {
+          "command": "magicode.setTask",
+          "when": "view == magicode.sessionView",
+          "group": "1_session@3"
+        },
+        {
+          "command": "magicode.installHook",
+          "when": "view == magicode.sessionView && magicode.hasRepo",
+          "group": "2_git@1"
+        },
+        {
+          "command": "magicode.configureApiKey",
+          "when": "view == magicode.sessionView",
+          "group": "3_config@1"
+        },
+        {
+          "command": "magicode.showLog",
+          "when": "view == magicode.sessionView",
+          "group": "3_config@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "magicode.acceptEditedProposal",
+          "when": "magicode.editingProposal && resourceScheme == untitled",
+          "group": "navigation@1"
+        },
+        {
+          "command": "magicode.cancelEditedProposal",
+          "when": "magicode.editingProposal && resourceScheme == untitled",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "magicode.acceptEditedProposal",
+          "when": "magicode.editingProposal"
+        },
+        {
+          "command": "magicode.cancelEditedProposal",
+          "when": "magicode.editingProposal"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "magicode",
+          "title": "MagiCode",
+          "icon": "media/magicode.svg"
+        }
+      ]
+    },
+    "views": {
+      "magicode": [
+        {
+          "id": "magicode.sessionView",
+          "name": "Sesión",
+          "icon": "media/magicode.svg",
+          "contextualTitle": "MagiCode"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "magicode.sessionView",
+        "contents": "Conecta MagiCode con MagiHub Smart Auto.\n[$(key) Configurar API key](command:magicode.configureApiKey)\nLa key se guarda en SecretStorage y nunca viaja en la telemetría.",
+        "when": "!magicode.hasKey"
+      },
+      {
+        "view": "magicode.sessionView",
+        "contents": "Abre una carpeta con un repositorio Git para empezar una sesión.\n[Abrir carpeta](command:vscode.openFolder)",
+        "when": "magicode.hasKey && !magicode.hasRepo"
+      },
+      {
+        "view": "magicode.sessionView",
+        "contents": "No hay sesión activa.\n[$(play) Iniciar sesión](command:magicode.startSession)",
+        "when": "magicode.hasKey && magicode.hasRepo && !magicode.hasSession"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "check-types": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "vscode:prepublish": "node esbuild.config.js --production",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license"
+  },
+  "dependencies": {
+    "@magicode/contracts": "*",
+    "@magicode/metrics": "*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.6.0"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "actor": { "display_name": "Ana Dev", "nickname": "anadev", "type": "user" },
+  "repository": { "type": "repository", "full_name": "acme/payments", "name": "payments", "uuid": "{d1b2c3}" },
+  "push": {
+    "changes": [
+      {
+        "new": {
+          "type": "branch",
+          "name": "feature/PAY-7-refunds",
+          "target": { "type": "commit", "hash": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00", "date": "2026-10-20T12:00:00+00:00" }
+        },
+        "old": {
+          "type": "branch",
+          "name": "feature/PAY-7-refunds",
+          "target": { "type": "commit", "hash": "beef0000beef0000beef0000beef0000beef0000", "date": "2026-10-19T12:00:00+00:00" }
+        },
+        "created": false,
+        "closed": false,
+        "forced": false,
+        "truncated": false,
+        "commits": [
+          {
+            "type": "commit",
+            "hash": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+            "date": "2026-10-20T12:00:00+00:00",
+            "message": "PAY-7 refunds endpoint\n\nMagiCode-Session: sess_bb1\n",
+            "author": { "raw": "Ana Dev <ana@acme.dev>", "user": { "nickname": "anadev", "display_name": "Ana Dev" } }
+          }
+        ]
+      },
+      {
+        "new": { "type": "tag", "name": "v2.0.0", "target": { "type": "commit", "hash": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00" } },
+        "old": null,
+        "created": true,
+        "closed": false,
+        "forced": false,
+        "commits": []
+      },
+      {
+        "new": null,
+        "old": { "type": "branch", "name": "old/experiment", "target": { "type": "commit", "hash": "aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000" } },
+        "created": false,
+        "closed": true,
+        "forced": false,
+        "commits": []
+      }
+    ]
+  }
+}

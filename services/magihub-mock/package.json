@@ -1,0 +1,23 @@
+{
+  "name": "@magicode/magihub-mock",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SIMULADO — implementa el contrato MagiHub (Smart Auto + usage + keys/self) para dev/demo.",
+  "type": "commonjs",
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "build:prod": "node esbuild.config.js --prod",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "check-types": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@magicode/contracts": "*",
+    "hono": "^4.13.0"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.19.0",
+    "@types/aws-lambda": "^8.10.150"
+  }
+}

@@ -1,0 +1,23 @@
+# Dependencias locales de MagiCode (solo desarrollo).
+#   docker compose up -d
+#   npm run create-table -w @magicode/api         # crea la single-table en dynamodb-local
+#   npm run migrate -w @magicode/api               # (opcional) esquema de la réplica analítica en Postgres
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    command: ['-jar', 'DynamoDBLocal.jar', '-sharedDb', '-inMemory']
+    ports:
+      - '8000:8000'
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: magicode
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      retries: 10

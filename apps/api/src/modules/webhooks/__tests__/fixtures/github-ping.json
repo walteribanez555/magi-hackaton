@@ -1,0 +1,7 @@
+{
+  "zen": "Keep it logically awesome.",
+  "hook_id": 30,
+  "hook": { "type": "Repository", "id": 30, "active": true, "events": ["push", "pull_request", "deployment_status"], "config": { "content_type": "json", "insecure_ssl": "0", "url": "https://api.example.com/api/v1/webhooks/github/int_0123456789abcdef" } },
+  "repository": { "id": 1296269, "full_name": "acme/shop" },
+  "sender": { "login": "anadev", "type": "User" }
+}

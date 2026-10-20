@@ -1,0 +1,27 @@
+{
+  "timestamp": 1760966400000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_generic",
+  "user": { "accountId": "5b10ac8d82e05b22cc7d4ef5", "displayName": "Ana Dev" },
+  "issue": {
+    "id": "10002",
+    "self": "https://acme.atlassian.net/rest/api/2/10002",
+    "key": "MAG-123",
+    "fields": {
+      "summary": "Login form",
+      "issuetype": { "id": "10001", "name": "Story" },
+      "project": { "id": "10000", "key": "MAG", "name": "MagiCode" },
+      "status": { "id": "3", "name": "En curso", "statusCategory": { "id": 4, "key": "indeterminate", "name": "In Progress" } },
+      "assignee": { "accountId": "5b10ac8d82e05b22cc7d4ef5", "displayName": "Ana Dev" },
+      "customfield_10016": 5,
+      "updated": "2026-10-20T13:20:00.000+0000",
+      "created": "2026-10-18T09:00:00.000+0000"
+    }
+  },
+  "changelog": {
+    "id": "10400",
+    "items": [
+      { "field": "status", "fieldtype": "jira", "fieldId": "status", "from": "10000", "fromString": "Por hacer", "to": "3", "toString": "En curso" }
+    ]
+  }
+}

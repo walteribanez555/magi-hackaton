@@ -1,0 +1,31 @@
+{
+  "name": "magicode",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "check-types": "turbo run check-types",
+    "format": "prettier --write \"**/*.{ts,md,json}\"",
+    "seed:demo": "tsx scripts/seed-demo.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.7.4",
+    "tsx": "^4.20.0",
+    "turbo": "^2.9.14",
+    "typescript": "5.9.2",
+    "vitest": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "npm@11.6.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ]
+}

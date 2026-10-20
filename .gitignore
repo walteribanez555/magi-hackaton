@@ -1,0 +1,22 @@
+node_modules
+dist
+build
+coverage
+.turbo
+.angular
+infra/cdk.out
+*.vsix
+
+# Secretos — ignora TODO .env* excepto los .example
+.env
+.env.*
+!.env.example
+!*.env.example
+
+.DS_Store
+*.pem
+*.key
+npm-debug.log*
+
+# Lookups de CDK con el id de cuenta (no versionar en repo público)
+infra/cdk.context.json

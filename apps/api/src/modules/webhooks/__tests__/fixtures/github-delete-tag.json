@@ -1,0 +1,7 @@
+{
+  "ref": "v0.9.0",
+  "ref_type": "tag",
+  "pusher_type": "user",
+  "repository": { "id": 1296269, "full_name": "acme/shop" },
+  "sender": { "login": "anadev", "type": "User" }
+}

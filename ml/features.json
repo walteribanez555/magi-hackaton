@@ -1,0 +1,32 @@
+{
+  "$comment": "GENERADO por scripts/export-scoring-features.mjs desde @magicode/contracts (scoring.ts). No editar a mano.",
+  "features": [
+    "accepted_added_lines",
+    "accepted_deleted_lines",
+    "files_count",
+    "importance_score",
+    "redundancy_score",
+    "mechanical_share",
+    "effective_lines",
+    "edited_before_accept_ratio",
+    "core_tier_share",
+    "test_tier_share",
+    "logic_kind_share",
+    "test_kind_share",
+    "tokens_total",
+    "tokens_per_effective_line",
+    "regenerations",
+    "latency_ms",
+    "session_acceptance_rate",
+    "has_task",
+    "task_is_bug",
+    "branch_is_default",
+    "hour_of_day"
+  ],
+  "criticality_thresholds": {
+    "low": 0,
+    "medium": 0.35,
+    "high": 0.6,
+    "critical": 0.8
+  }
+}
