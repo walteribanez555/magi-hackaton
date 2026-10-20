@@ -204,6 +204,9 @@ async function mapLimit<T, R>(xs: T[], n: number, fn: (x: T) => Promise<R>): Pro
   return out;
 }
 
+/** automation de un commit conocido solo por el push: desconocida (null), nunca "0 % IA". */
+const UNKNOWN_AUTOMATION = { commit_added_lines: null, ai_matched_lines: null, ai_share: null, ai_lost_lines: null, effective_lines: null };
+
 const inWindow = (v: string | undefined, from: string, to: string) => !!v && v >= from && v <= to;
 
 function isDuplicateCancel(err: unknown): boolean {
@@ -646,11 +649,38 @@ export class ProductivityService {
     return computeChangeItems(await this.buildInput(caller, apiKey, q));
   }
 
+  /**
+   * GET /productivity/projects — filas Project (IDE) ∪ proyectos de las peticiones recientes de la
+   * key (sesiones IDE aunque falte la fila Project) ∪ proyectos con integraciones.
+   */
   async projects(caller: Caller): Promise<Array<{ project_id: string; repositories: string[]; last_activity_at: string }>> {
-    const ps = await this.repo.listProjects(caller.tenant_id);
-    return ps
-      .map((p) => ({ project_id: p.project_id, repositories: [...(p.repositories ?? [])].sort(), last_activity_at: p.last_activity_at }))
-      .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''));
+    const t = caller.tenant_id;
+    const now = this.clock().getTime();
+    const since = iso(now - config.getValue('usage').maxWindowDays * DAY_MS);
+    const [ps, reqs, ints] = await Promise.all([
+      this.repo.listProjects(t),
+      this.repo.listRequestsOfKey(t, caller.key_id, since, iso(now)).catch(() => [] as AiRequestItem[]),
+      this.integrations.listByTenant(t).catch(() => [] as Array<{ project_id: string; status: string; repository?: string; updated_at?: string }>),
+    ]);
+    const out = new Map<string, { repositories: Set<string>; last_activity_at: string }>();
+    const touch = (project: string | undefined, repo: string | undefined, at: string | undefined) => {
+      if (!project) return;
+      const cur = out.get(project) ?? { repositories: new Set<string>(), last_activity_at: '' };
+      if (repo) cur.repositories.add(repo);
+      if (at && at > cur.last_activity_at) cur.last_activity_at = at;
+      out.set(project, cur);
+    };
+    for (const p of ps) {
+      touch(p.project_id, undefined, p.last_activity_at);
+      for (const r of p.repositories ?? []) touch(p.project_id, r, undefined);
+    }
+    for (const r of reqs) touch(r.project_id, r.repository, r.occurred_at);
+    for (const i of ints as Array<{ project_id: string; repository?: string; status?: string }>) {
+      if (i.status !== 'disabled') touch(i.project_id, i.repository, undefined);
+    }
+    return [...out.entries()]
+      .map(([project_id, v]) => ({ project_id, repositories: [...v.repositories].sort(), last_activity_at: v.last_activity_at }))
+      .sort((a, b) => b.last_activity_at.localeCompare(a.last_activity_at) || a.project_id.localeCompare(b.project_id));
   }
 
   /**
@@ -677,33 +707,38 @@ export class ProductivityService {
         (!q.task_key || (c.task_keys ?? []).includes(q.task_key)) &&
         (!q.branch || c.branch === q.branch || c.remote_branch === q.branch),
     );
-    // ?developer: commits sin developer propio heredan el de su sesión
-    let sessionDevelopers: Map<string, string | undefined> | undefined;
-    if (q.developer) {
-      const ids = [...new Set(commits.filter((c) => !c.developer && c.session_id).map((c) => c.session_id))];
-      const sessions = ids.length ? await this.repo.batchGet<SessionItem>(ids.map((id) => keys.session(t, id))) : [];
-      sessionDevelopers = new Map(sessions.map((s) => [s.session_id, s.developer]));
-    }
+    // commits sin developer propio (anteriores al campo) heredan el de su sesión
+    const ids = [...new Set(commits.filter((c) => !c.developer && c.session_id).map((c) => c.session_id))];
+    const sessions = ids.length ? await this.repo.batchGet<SessionItem>(ids.map((id) => keys.session(t, id))).catch(() => [] as SessionItem[]) : [];
+    const sessionDevelopers = new Map(sessions.map((s) => [s.session_id, s.developer]));
     commits = commits.filter((c) => commitMatches(c, q, { pa: prAuthor, sessionDevelopers }));
     return commits
-      .map((c) => ({
-        sha: c.sha,
-        repository: c.repository,
-        session_id: c.session_id,
-        project_id: c.project_id,
-        branch: c.branch ?? null,
-        developer: c.developer ?? sessionDevelopers?.get(c.session_id) ?? null,
-        task_keys: c.task_keys ?? [],
-        parent_sha: c.parent_sha ?? null,
-        committed_at: c.committed_at,
-        files: c.files,
-        change_ids: c.change_ids,
-        automation: c.automation,
-        has_session_trailer: c.has_session_trailer,
-        source: c.commit_source,
-        reference_tags: c.reference_tags ?? [],
-        provenance: c.provenance,
-      }))
+      .map((c) => {
+        // conocido solo por el push (el IDE no lo reportó): sin sesión ni cruce de hashes ⇒ null (desconocido), no 0
+        const remoteOnly = c.remote_only === true && !c.ide_reported_at;
+        return {
+          sha: c.sha,
+          repository: c.repository,
+          session_id: c.session_id || null,
+          project_id: c.project_id,
+          branch: c.branch ?? null,
+          developer: c.developer ?? (c.session_id ? sessionDevelopers.get(c.session_id) : undefined) ?? null,
+          task_keys: c.task_keys ?? [],
+          parent_sha: c.parent_sha ?? null,
+          committed_at: c.committed_at,
+          files: c.files,
+          change_ids: c.change_ids,
+          automation: remoteOnly ? UNKNOWN_AUTOMATION : c.automation,
+          has_session_trailer: c.has_session_trailer,
+          source: c.commit_source,
+          reference_tags: c.reference_tags ?? [],
+          verified_remote: c.verified_remote === true,
+          remote_branch: c.remote_branch ?? null,
+          remote_pushed_at: c.remote_pushed_at ?? null,
+          remote_only: remoteOnly,
+          provenance: c.provenance,
+        };
+      })
       .sort((a, b) => b.committed_at.localeCompare(a.committed_at));
   }
 

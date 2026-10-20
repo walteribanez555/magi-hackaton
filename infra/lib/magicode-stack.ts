@@ -26,6 +26,15 @@ import * as triggers from 'aws-cdk-lib/triggers';
 /** Entidades operativas que el proyector NO replica a Postgres (outbox, idempotencia, webhooks). */
 const PROJECTOR_IGNORED = ['OutboxAction', 'ActionIdem', 'WebhookDelivery'];
 
+/**
+ * Smart Auto sobre Bedrock: inference profiles (verificados con Converse en us-east-1) y el
+ * foundation model subyacente de cada uno (el profile enruta a varias regiones ⇒ ARN con `*`).
+ */
+export const SMART_AUTO_MODELS = {
+  fast:   { profile: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',  foundation: 'anthropic.claude-haiku-4-5-20251001-v1:0' },
+  strong: { profile: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',     foundation: 'anthropic.claude-sonnet-4-5-20250929-v1:0' },
+} as const;
+
 export interface MagicodeStackProps extends cdk.StackProps {
   /** Nombre del entorno: dev | staging | prod. */
   environment: string;
@@ -35,6 +44,12 @@ export interface MagicodeStackProps extends cdk.StackProps {
    * es obligatorio `magihubBaseUrl` (MagiHub real).
    */
   deployMock?: boolean;
+  /**
+   * Proveedor del adaptador MagiHub desplegado aquí: `bedrock` (default; inferencia REAL con
+   * Amazon Bedrock, tokens medidos) o `mock` (SIMULADO, determinista). Contexto
+   * `-c magihubProvider=bedrock|mock`.
+   */
+  magihubProvider?: 'bedrock' | 'mock';
   /**
    * Demo sin login: la API acepta peticiones sin Authorization como la key de demo del mock.
    * Por defecto activo solo fuera de prod y con el mock (la key `mh_demo_*` no es un secreto).
@@ -76,7 +91,9 @@ export interface MagicodeStackProps extends cdk.StackProps {
  *   - apps/api (projector.ts)  → Lambda en VPC consumiendo el stream de Dynamo (DLQ SQS).
  *   - apps/api (migrator.ts)   → Lambda en VPC que corre las migraciones en CADA deploy
  *                                (aws-cdk-lib/triggers) tras crear la BD.
- *   - services/magihub-mock    → Lambda + HTTP API propios: MagiHub SIMULADO (tag simulated=true).
+ *   - services/magihub-mock    → Lambda + Function URL (120 s): adaptador MagiHub. Con
+ *                                magihubProvider=bedrock (default) hace inferencia REAL vía
+ *                                Bedrock Converse; con mock es SIMULADO (tag simulated=true).
  *   - apps/dashboard           → estático S3 privado (OAC) + CloudFront (SPA Angular) +
  *                                `/config.json` con la URL de la API leída en runtime.
  *   - Webhooks de integraciones: misma HTTP API (POST /api/v1/webhooks/{provider}/{id});
@@ -115,6 +132,7 @@ export class MagicodeStack extends cdk.Stack {
     const repoRoot = path.join(__dirname, '..', '..');
     const deployMock = props.deployMock ?? true;
     const demoOpenAccess = (props.demoOpenAccess ?? true) && !isProd && deployMock;
+    const magihubProvider = props.magihubProvider ?? 'bedrock';
 
     if (!deployMock && !props.magihubBaseUrl) {
       throw new Error('deployMock=false requiere el contexto magihubBaseUrl (MagiHub real).');
@@ -276,28 +294,71 @@ export class MagicodeStack extends cdk.Stack {
       });
     };
 
-    // ── MagiHub SIMULADO (mock) ─────────────────────────────────────────────────
-    // Implementa el contrato MagiHub (Smart Auto + usage + keys/self) para dev/demo.
-    // Guarda su estado en la misma tabla (prefijos propios, MOCK_TABLE_NAME).
+    // ── MagiHub (adaptador: Bedrock real o mock SIMULADO) ────────────────────────
+    // Implementa el contrato MagiHub (Smart Auto + usage + keys/self). Guarda su consumo en
+    // la misma tabla (prefijos propios, MOCK_TABLE_NAME). Se expone por Function URL: el HTTP
+    // API corta integraciones a 30 s, poco para generar código; la URL permite 120 s. authType
+    // NONE: el propio adaptador valida la key `mh_*` en cada ruta /v1/*.
     let mockApi: HttpApi | undefined;
+    let magihubFnUrl: lambda.FunctionUrl | undefined;
     if (deployMock) {
+      const isBedrock = magihubProvider === 'bedrock';
       const mockFn = makeFn('MagiHubMockFn', 'magihub-mock', {
-        description: 'MagiHub SIMULADO (mock del contrato MagiHub)',
+        description: isBedrock
+          ? 'MagiHub adapter: Smart Auto real sobre Amazon Bedrock (Converse)'
+          : 'MagiHub SIMULADO (mock del contrato MagiHub)',
         entry:       path.join(repoRoot, 'services/magihub-mock/src/index.ts'),
-        environment: { ...baseEnv, MOCK_TABLE_NAME: table.tableName },
+        timeout:     cdk.Duration.seconds(120),
+        memorySize:  1024,
+        environment: {
+          ...baseEnv,
+          MOCK_TABLE_NAME:         table.tableName,
+          MAGIHUB_PROVIDER:        magihubProvider,
+          SMART_AUTO_FAST_MODEL:   SMART_AUTO_MODELS.fast.profile,
+          SMART_AUTO_STRONG_MODEL: SMART_AUTO_MODELS.strong.profile,
+          SMART_AUTO_MAX_TOKENS:   '4096',
+        },
       });
       table.grantReadWriteData(mockFn);
 
+      if (isBedrock) {
+        // Igual que fraud-detector: Converse/ConverseStream se autorizan como
+        // bedrock:InvokeModel / InvokeModelWithResponseStream. Los profiles cross-region
+        // (global./us.) enrutan dinámicamente a otras regiones ⇒ foundation-model en `*` y sin
+        // condición de región (rompería la inferencia cuando AWS elige otra región).
+        const models = Object.values(SMART_AUTO_MODELS);
+        mockFn.addToRolePolicy(new iam.PolicyStatement({
+          sid:     'AllowBedrockSmartAuto',
+          actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+          resources: [
+            ...models.map((m) => `arn:${this.partition}:bedrock:${this.region}:${this.account}:inference-profile/${m.profile}`),
+            ...models.map((m) => `arn:${this.partition}:bedrock:*::foundation-model/${m.foundation}`),
+          ],
+        }));
+      }
+
+      magihubFnUrl = mockFn.addFunctionUrl({
+        authType:   lambda.FunctionUrlAuthType.NONE,
+        invokeMode: lambda.InvokeMode.BUFFERED,
+      });
+
+      // HTTP API previo (compatibilidad): mismas rutas, pero con el tope de 30 s.
       mockApi = new HttpApi(this, 'MagiHubMockHttpApi', {
         apiName:            `${prefix}-magihub-mock`,
-        description:        'MagiHub SIMULADO',
+        description:        isBedrock ? 'MagiHub adapter (legacy, 30 s; usar MagiHubUrl)' : 'MagiHub SIMULADO',
         defaultIntegration: new HttpLambdaIntegration('MagiHubMockIntegration', mockFn),
       });
-      cdk.Tags.of(mockFn).add('simulated', 'true');
-      cdk.Tags.of(mockApi).add('simulated', 'true');
+      if (!isBedrock) {
+        cdk.Tags.of(mockFn).add('simulated', 'true');
+        cdk.Tags.of(mockApi).add('simulated', 'true');
+      }
     }
-    const magihubBaseUrl = props.magihubBaseUrl ?? mockApi!.apiEndpoint;
-    const magihubMode    = props.magihubBaseUrl ? 'real' : 'mock';
+    // La Function URL termina en `/`: se normaliza a `https://<host>` (una sola base URL).
+    const magihubUrl = magihubFnUrl
+      ? `https://${cdk.Fn.select(2, cdk.Fn.split('/', magihubFnUrl.url))}`
+      : undefined;
+    const magihubBaseUrl = props.magihubBaseUrl ?? magihubUrl!;
+    const magihubMode    = props.magihubBaseUrl ? 'real' : magihubProvider === 'bedrock' ? 'bedrock' : 'mock';
 
     // ── Dashboard (S3 privado + CloudFront OAC, SPA Angular) ────────────────────
     // Va antes de la API: su URL entra en CORS_ORIGINS. defaultRootObject=index.html y
@@ -547,9 +608,13 @@ export class MagicodeStack extends cdk.Stack {
       value: `${api.apiEndpoint}/api/v1/webhooks`,
       description: 'Base de webhooks: <WebhookBaseUrl>/{provider}/{integrationId}',
     });
+    new cdk.CfnOutput(this, 'MagiHubUrl',      {
+      value: magihubUrl ?? 'not-deployed',
+      description: `Base URL de MagiHub (Function URL, 120 s; provider=${magihubProvider}) — la usan API y extensión`,
+    });
     new cdk.CfnOutput(this, 'MagiHubMockUrl',  {
       value: mockApi ? mockApi.apiEndpoint : 'not-deployed',
-      description: 'URL del MagiHub SIMULADO',
+      description: 'HTTP API previo del adaptador MagiHub (tope 30 s; legacy)',
     });
     new cdk.CfnOutput(this, 'DashboardUrl',    { value: dashboardUrl, description: 'URL pública del dashboard' });
     new cdk.CfnOutput(this, 'DashboardBucket', { value: dashboardBucket.bucketName });

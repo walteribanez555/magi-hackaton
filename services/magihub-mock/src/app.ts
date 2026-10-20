@@ -8,14 +8,29 @@ import {
   type UsageRecord,
   type UsageResponse,
 } from '@magicode/contracts';
+import {
+  BedrockError,
+  bedrockClient,
+  bedrockCostOf,
+  converseSmartAuto,
+  providerName,
+  smartAutoConfig,
+  type BedrockLike,
+  type CompletionResult,
+  type ProviderName,
+  type SmartAutoConfig,
+} from './bedrock';
 import { costOf, generateCompletion, routeModel, textOf, tokensOf, type ChatMessage } from './completions';
 import { identityOf, readBearer } from './identity';
-import { createStore, type StoredUsage, type UsageStore } from './store';
+import { createStore, isRealUsage, type StoredUsage, type UsageStore } from './store';
 
 /**
- * ⚠️ MagiHub SIMULADO (services/magihub-mock). Implementa el contrato que MagiCode necesita de
- * MagiHub para desarrollo y demo. TODA respuesta lleva `x-magihub-simulated: true` y el consumo
- * `simulated: true`: nada de lo que sale de aquí es una medición real.
+ * MagiHub de MagiCode (services/magihub-mock), dos proveedores (MAGIHUB_PROVIDER):
+ * - mock (default): SIMULADO. Toda respuesta lleva `x-magihub-simulated: true` y el consumo
+ *   `simulated: true`: nada es una medición real.
+ * - bedrock: inferencia REAL con Amazon Bedrock (Converse). `x-magihub-provider: bedrock`,
+ *   `id`/`x-request-id` = `req_` + requestId de Bedrock y `usage` = tokens medidos por Bedrock.
+ * La auth (`mh_demo_*` → /v1/keys/self) es la del gateway en ambos modos.
  */
 
 type Env = { Variables: { identity: KeyIdentity } };
@@ -23,19 +38,41 @@ type Env = { Variables: { identity: KeyIdentity } };
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
-const err = (c: Context, status: 400 | 401 | 403 | 404, message: string, type: string) =>
-  c.json({ error: { message, type, code: type }, simulated: true }, status);
+export interface AppOptions {
+  provider?: ProviderName;
+  /** cliente Bedrock (tests lo inyectan); default: cliente único del contenedor */
+  bedrock?: BedrockLike;
+  config?: SmartAutoConfig;
+}
 
-export function createApp(store: UsageStore = createStore()) {
+type Body = {
+  model?: string;
+  messages?: ChatMessage[];
+  stream?: boolean;
+  stream_options?: { include_usage?: boolean };
+  max_tokens?: number;
+  max_completion_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  stop?: string | string[];
+};
+
+export function createApp(store: UsageStore = createStore(), opts: AppOptions = {}) {
   const app = new Hono<Env>();
+  const provider = opts.provider ?? providerName();
+  const simulated = provider !== 'bedrock';
+
+  const err = (c: Context, status: 400 | 401 | 403 | 404 | 429 | 502 | 504, message: string, type: string) =>
+    c.json({ error: { message, type, code: type }, ...(simulated ? { simulated: true } : {}) }, status);
 
   app.use('*', async (c, next) => {
     await next();
-    c.header('x-magihub-simulated', 'true');
+    if (simulated) c.header('x-magihub-simulated', 'true');
+    else c.header('x-magihub-provider', provider);
   });
 
-  app.get('/', (c) => c.json({ service: 'magihub-mock', simulated: true, docs: 'services/magihub-mock/README.md' }));
-  app.get('/health', (c) => c.json({ status: 'ok', simulated: true }));
+  app.get('/', (c) => c.json({ service: 'magihub-mock', provider, simulated, docs: 'services/magihub-mock/README.md' }));
+  app.get('/health', (c) => c.json({ status: 'ok', provider, simulated }));
 
   // Auth: Bearer mh_demo_* (simulado)
   app.use('/v1/*', async (c, next) => {
@@ -49,7 +86,7 @@ export function createApp(store: UsageStore = createStore()) {
 
   // ── POST /v1/chat/completions (OpenAI-compatible) ─────────────────────────
   app.post('/v1/chat/completions', async (c) => {
-    let body: { model?: string; messages?: ChatMessage[]; stream?: boolean; stream_options?: { include_usage?: boolean } };
+    let body: Body;
     try {
       body = await c.req.json();
     } catch {
@@ -63,6 +100,8 @@ export function createApp(store: UsageStore = createStore()) {
     if (!Array.isArray(body.messages) || !body.messages.length) {
       return err(c, 400, '`messages` is required', 'invalid_request_error');
     }
+
+    if (!simulated) return bedrockCompletion(c, body, requested, identity);
 
     const promptChars = body.messages.reduce((a, m) => a + textOf(m).length, 0);
     const lastUser = [...body.messages].reverse().find((m) => m.role === 'user');
@@ -125,6 +164,84 @@ export function createApp(store: UsageStore = createStore()) {
     });
   });
 
+  // ── Smart Auto REAL (Bedrock) ─────────────────────────────────────────────
+  async function bedrockCompletion(c: Context<Env>, body: Body, requested: string, identity: KeyIdentity) {
+    let r: CompletionResult;
+    try {
+      r = await converseSmartAuto(
+        {
+          messages: body.messages!,
+          max_tokens: body.max_completion_tokens ?? body.max_tokens,
+          temperature: body.temperature,
+          top_p: body.top_p,
+          stop: body.stop,
+        },
+        opts.bedrock ?? bedrockClient(),
+        opts.config ?? smartAutoConfig(),
+      );
+    } catch (e) {
+      const be = e instanceof BedrockError ? e : new BedrockError(String((e as Error)?.message ?? e), 502, 'provider_error');
+      console.error(JSON.stringify({ level: 'error', msg: 'bedrock converse failed', status: be.status, type: be.type, error: be.message, bedrock_request_id: be.requestId }));
+      if (be.requestId) c.header('x-request-id', `req_${be.requestId}`);
+      return err(c, be.status, be.message, be.type);
+    }
+
+    const id = `req_${r.requestId}`;
+    const created = Math.floor(Date.now() / 1000);
+    const cost_usd = bedrockCostOf(r.model, r.usage);
+    await store.put({
+      request_id: id,
+      key_id: identity.key_id,
+      ts: new Date().toISOString(),
+      model: r.model,
+      usage: r.usage,
+      ...(cost_usd !== undefined ? { cost_usd } : {}),
+      provider: 'bedrock',
+      requested_model: requested,
+      latency_ms: r.latencyMs,
+    });
+    console.log(JSON.stringify({ level: 'info', msg: 'smart-auto completion', request_id: id, key_id: identity.key_id, model: r.model, tier: r.route.tier, reason: r.route.reason, prompt_chars: r.route.promptChars, usage: r.usage, cost_usd, latency_ms: r.latencyMs }));
+
+    c.header('x-request-id', id);
+    c.header('x-magihub-routed-model', r.model);
+    c.header('x-magihub-route', `${r.route.tier}:${r.route.reason}`);
+
+    if (body.stream) {
+      // Pseudo-stream: la Function URL responde en modo BUFFERED, así que se invoca Converse
+      // completo y se emite en chunks SSE con el formato OpenAI (+ chunk final con usage).
+      return streamSSE(c, async (s) => {
+        const pieces = r.content.match(/[\s\S]{1,256}/g) ?? [''];
+        for (const [i, piece] of pieces.entries()) {
+          await s.writeSSE({
+            data: JSON.stringify({
+              id,
+              object: 'chat.completion.chunk',
+              created,
+              model: r.model,
+              choices: [{ index: 0, delta: i === 0 ? { role: 'assistant', content: piece } : { content: piece }, finish_reason: null }],
+            }),
+          });
+        }
+        await s.writeSSE({
+          data: JSON.stringify({ id, object: 'chat.completion.chunk', created, model: r.model, choices: [{ index: 0, delta: {}, finish_reason: r.finishReason }] }),
+        });
+        await s.writeSSE({ data: JSON.stringify({ id, object: 'chat.completion.chunk', created, model: r.model, choices: [], usage: r.usage }) });
+        await s.writeSSE({ data: '[DONE]' });
+      });
+    }
+
+    return c.json({
+      id,
+      object: 'chat.completion',
+      created,
+      model: r.model,
+      requested_model: requested,
+      choices: [{ index: 0, message: { role: 'assistant', content: r.content }, finish_reason: r.finishReason }],
+      usage: r.usage,
+      provider: 'bedrock',
+    });
+  }
+
   // ── GET /v1/usage?from&to&granularity ─────────────────────────────────────
   app.get('/v1/usage', async (c) => {
     const from = c.req.query('from');
@@ -143,7 +260,8 @@ export function createApp(store: UsageStore = createStore()) {
     const fromIso = new Date(from).toISOString();
     const toIso = new Date(Math.min(Date.parse(to), Date.parse(cutoff))).toISOString();
     const identity = c.get('identity');
-    const rows = await store.list(identity.key_id, fromIso, toIso);
+    // Nunca se mezclan: en bedrock solo registros reales; en mock solo los simulados.
+    const rows = (await store.list(identity.key_id, fromIso, toIso)).filter((r) => isRealUsage(r) === !simulated);
 
     let records: UsageRecord[];
     if (g.data === 'request') {
@@ -154,7 +272,7 @@ export function createApp(store: UsageStore = createStore()) {
         model: r.model,
         usage: r.usage,
         requests: 1,
-        cost_usd: r.cost_usd,
+        ...(r.cost_usd !== undefined ? { cost_usd: r.cost_usd } : {}),
       }));
     } else {
       const size = g.data === 'hour' ? HOUR : DAY;
@@ -168,13 +286,13 @@ export function createApp(store: UsageStore = createStore()) {
           model: r.model,
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
           requests: 0,
-          cost_usd: 0,
         };
         b.usage.prompt_tokens += r.usage.prompt_tokens;
         b.usage.completion_tokens += r.usage.completion_tokens;
         b.usage.total_tokens += r.usage.total_tokens;
+        if (r.usage.cached_tokens) b.usage.cached_tokens = (b.usage.cached_tokens ?? 0) + r.usage.cached_tokens;
         b.requests += 1;
-        b.cost_usd = Math.round(((b.cost_usd ?? 0) + r.cost_usd) * 1e6) / 1e6;
+        if (r.cost_usd !== undefined) b.cost_usd = Math.round(((b.cost_usd ?? 0) + r.cost_usd) * 1e6) / 1e6;
         buckets.set(k, b);
       }
       records = [...buckets.values()].sort((a, b) => a.window_start.localeCompare(b.window_start));
@@ -186,7 +304,7 @@ export function createApp(store: UsageStore = createStore()) {
       to: new Date(to).toISOString(),
       granularity: g.data,
       records,
-      simulated: true,
+      simulated,
       ingestion_delay_minutes: delayMin,
     };
     return c.json(res);

@@ -140,6 +140,22 @@ describe('TasksService.list', () => {
   });
 });
 
+describe('TasksService.list — ?repository ?developer ?pr_author', () => {
+  it('?developer: tareas con sesiones del developer y métricas solo de esas sesiones', async () => {
+    store.put({ ...store.getSync(keys.session(T, 's1'))!, developer: 'ana@x.io' });
+    expect((await svc.list(T, { project_id: 'shop', developer: 'ana@x.io' })).map((t) => [t.task_key, t.tokens.value])).toEqual([['MAG-123', 1500]]);
+    expect(await svc.list(T, { project_id: 'shop', developer: 'bob@x.io' })).toEqual([]);
+  });
+
+  it('?pr_author: tareas de sus PRs (o con una rama origen de sus PRs); ?repository: enlaces del repo', async () => {
+    store.put({ ...store.getSync(keys.pullRequest(T, 'acme/shop', 42))!, ...keys.pullRequestGsi1(T, 'shop', '2026-10-20T12:00:00.000Z'), author_login: 'AnaDev' });
+    expect((await svc.list(T, { project_id: 'shop', pr_author: 'anadev' })).map((t) => t.task_key)).toEqual(['MAG-123']);
+    expect(await svc.list(T, { project_id: 'shop', pr_author: 'bob' })).toEqual([]);
+    expect((await svc.list(T, { project_id: 'shop', repository: 'acme/shop' })).map((t) => t.task_key)).toEqual(['MAG-123']);
+    expect(await svc.list(T, { project_id: 'shop', repository: 'acme/other' })).toEqual([]);
+  });
+});
+
 describe('TasksService.detail', () => {
   it('devuelve la tarea + sesiones, commits, ramas, PRs y despliegues enlazados', async () => {
     const d = await svc.detail(T, 'mag-123');

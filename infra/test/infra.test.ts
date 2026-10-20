@@ -119,7 +119,7 @@ describe('MagicodeStack', () => {
       Environment: {
         Variables: Match.objectLike({
           APP_ENV: 'test',
-          MAGIHUB_MODE: 'mock',
+          MAGIHUB_MODE: 'bedrock',
           SCORING_SURVIVAL_ENDPOINT: 'magicode-test-survival',
           SCORING_REWORK_ENDPOINT: 'magicode-test-rework',
           NODE_OPTIONS: '--enable-source-maps',
@@ -232,7 +232,7 @@ describe('MagicodeStack', () => {
     template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
       Name: 'magicode-test-api',
       CorsConfiguration: Match.objectLike({
-        AllowMethods: ['GET', 'POST', 'OPTIONS'],
+        AllowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         AllowHeaders: ['authorization', 'content-type'],
         AllowOrigins: Match.arrayWith(['http://localhost:4200']),
       }),
@@ -267,11 +267,81 @@ describe('MagicodeStack', () => {
   test('outputs presentes', () => {
     const outputs = Object.keys(template.findOutputs('*'));
     for (const o of [
-      'ApiUrl', 'WebhookBaseUrl', 'MagiHubMockUrl', 'DashboardUrl', 'DashboardBucket', 'DistributionId',
+      'ApiUrl', 'WebhookBaseUrl', 'MagiHubUrl', 'MagiHubMockUrl', 'DashboardUrl', 'DashboardBucket', 'DistributionId',
       'TableName', 'TableStreamArn', 'DbEndpoint', 'DbSecretArn', 'VpcId',
     ]) {
       expect(outputs).toContain(o);
     }
+  });
+
+  test('MagiHub adapter (bedrock por defecto): Function URL 120 s, env de Smart Auto, sin tag simulated', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'magicode-test-magihub-mock',
+      Timeout: 120,
+      MemorySize: 1024,
+      Environment: {
+        Variables: Match.objectLike({
+          MAGIHUB_PROVIDER: 'bedrock',
+          SMART_AUTO_FAST_MODEL: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+          SMART_AUTO_STRONG_MODEL: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+          SMART_AUTO_MAX_TOKENS: '4096',
+          MOCK_TABLE_NAME: Match.anyValue(),
+        }),
+      },
+    });
+    const fns = template.findResources('AWS::Lambda::Function', { Properties: { FunctionName: 'magicode-test-magihub-mock' } });
+    const tags: Array<{ Key: string }> = Object.values(fns)[0].Properties.Tags ?? [];
+    expect(tags.map((t) => t.Key)).not.toContain('simulated');
+
+    template.hasResourceProperties('AWS::Lambda::Url', { AuthType: 'NONE', InvokeMode: 'BUFFERED' });
+    template.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunctionUrl',
+      Principal: '*',
+      FunctionUrlAuthType: 'NONE',
+    });
+
+    // La API usa la Function URL (sin `/` final) como única base URL de MagiHub.
+    const api = Object.values(template.findResources('AWS::Lambda::Function', { Properties: { FunctionName: 'magicode-test-api' } }))[0];
+    const baseUrl = JSON.stringify(api.Properties.Environment.Variables.MAGIHUB_BASE_URL);
+    expect(baseUrl).toContain('https://');
+    expect(baseUrl).toContain('FunctionUrl');
+    expect(baseUrl).toContain('Fn::Split');
+  });
+
+  test('IAM Bedrock: InvokeModel(+stream) en inference profiles y foundation models (todas las regiones)', () => {
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'AllowBedrockSmartAuto',
+            Effect: 'Allow',
+            Action: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+            Resource: [
+              { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':bedrock:us-east-1:111111111111:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0']] },
+              { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':bedrock:us-east-1:111111111111:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0']] },
+              { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0']] },
+              { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0']] },
+            ],
+          }),
+        ]),
+      },
+    });
+  });
+
+  test('magihubProvider=mock: SIMULADO, sin IAM de Bedrock, MAGIHUB_MODE=mock', () => {
+    const mock = synth({ magihubProvider: 'mock' });
+    mock.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'magicode-test-magihub-mock',
+      Environment: { Variables: Match.objectLike({ MAGIHUB_PROVIDER: 'mock' }) },
+      Tags: Match.arrayWith([{ Key: 'simulated', Value: 'true' }]),
+    });
+    mock.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'magicode-test-api',
+      Environment: { Variables: Match.objectLike({ MAGIHUB_MODE: 'mock' }) },
+    });
+    const policies = JSON.stringify(mock.findResources('AWS::IAM::Policy'));
+    expect(policies).not.toContain('bedrock:');
+    mock.resourceCountIs('AWS::Lambda::Url', 1);
   });
 
   test('MagiHub real: sin mock y MAGIHUB_MODE=real', () => {

@@ -5,6 +5,10 @@ export type { PullRequestState };
 export interface PullRequestQuery {
   project_id?: string;
   repository?: string;
+  /** email de git: PRs cuya rama origen tiene sesiones de ese developer */
+  developer?: string;
+  /** login del autor del PR (author_login) */
+  pr_author?: string;
   state?: PullRequestState;
 }
 
@@ -20,6 +24,8 @@ export interface PullRequestItem {
   head_sha: string;
   merge_sha: string | null;
   url: string;
+  /** autor del PR en el proveedor (lo escribe webhooks.projection) */
+  author_login?: string | null;
   task_keys?: string[] | Set<string>;
   opened_at?: string;
   merged_at?: string;

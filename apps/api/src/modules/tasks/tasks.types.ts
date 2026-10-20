@@ -4,6 +4,10 @@ export type StatusCategory = TaskListItem['status_category'];
 
 export interface TaskQuery {
   project_id?: string;
+  /** ?repository ?developer ?pr_author (productivity.filters) */
+  repository?: string;
+  developer?: string;
+  pr_author?: string;
   status_category?: StatusCategory;
 }
 

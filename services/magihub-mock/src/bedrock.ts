@@ -237,7 +237,7 @@ export async function converseSmartAuto(
   }
 
   const content = (res.output?.message?.content ?? []).map((b) => b.text ?? '').join('');
-  const u = res.usage ?? {};
+  const u: Partial<NonNullable<ConverseCommandOutput['usage']>> = res.usage ?? {};
   const cached = u.cacheReadInputTokens ?? 0;
   const usage: TokenUsage = {
     prompt_tokens: u.inputTokens ?? 0,

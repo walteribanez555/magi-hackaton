@@ -138,6 +138,42 @@ describe('POST /productivity/events — ingesta', () => {
   });
 });
 
+describe('developer (git user.email) del envelope', () => {
+  const sessionUpd = () => updatesOf('META').find((w) => w.Update!.Key!.PK === keys.sessionPk('tenant-a', 's1'))!;
+
+  it('session.started guarda developer en minúsculas y developer_name', async () => {
+    await service.ingest(caller, env('session.started', { editor: 'vscode', extension_version: '0.1.0' }, { developer: '  Ana.Dev@Example.COM ', developer_name: ' Ana Dev ' }));
+    expect(setValue(sessionUpd(), 'developer')).toBe('ana.dev@example.com');
+    expect(setValue(sessionUpd(), 'developer_name')).toBe('Ana Dev');
+  });
+
+  it('un evento posterior que trae developer actualiza la sesión; sin developer no la pisa', async () => {
+    await service.ingest(caller, env('session.ended', { reason: 'user' }, { developer: 'BOB@x.io' }));
+    expect(setValue(sessionUpd(), 'developer')).toBe('bob@x.io');
+    ddb.resetHistory();
+    await service.ingest(caller, env('session.ended', { reason: 'user' }));
+    expect(setValue(sessionUpd(), 'developer')).toBeUndefined();
+    expect(setValue(sessionUpd(), 'developer_name')).toBeUndefined();
+  });
+
+  it('se copia a Change y Commit', async () => {
+    await service.ingest(caller, {
+      events: [
+        env('code.accepted', { change_id: 'c1', ai_request_id: 'r1', files, patch_hash: 'abcdef12', accepted_added_lines: 10, accepted_deleted_lines: 0, dimensions: dims(10) }, { developer: 'Ana@X.io' }),
+        env(
+          'git.committed',
+          { sha: SHA, committed_at: '2026-10-20T10:10:00.000Z', files, change_ids: ['c1'], automation: { commit_added_lines: 10, ai_matched_lines: 10, ai_share: 1, ai_lost_lines: 0, effective_lines: 8 }, has_session_trailer: true },
+          { developer: 'Ana@X.io', occurred_at: '2026-10-20T10:10:00.000Z' },
+        ),
+      ],
+    });
+    const changeUpd = updatesOf('C#c1');
+    expect(changeUpd.length).toBeGreaterThan(0);
+    for (const u of changeUpd) expect(setValue(u, 'developer')).toBe('ana@x.io');
+    expect(setValue(updatesOf(`COMMIT#${SHA}`)[0]!, 'developer')).toBe('ana@x.io');
+  });
+});
+
 describe('transiciones de estado del cambio', () => {
   it('máquina de estados monótona', () => {
     expect(nextChangeStatus(undefined, 'proposed')).toBe('proposed');

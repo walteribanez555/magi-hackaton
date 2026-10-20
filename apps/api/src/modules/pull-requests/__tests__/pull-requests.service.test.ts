@@ -83,4 +83,22 @@ describe('PullRequestsService.list', () => {
   it('aislamiento por tenant', async () => {
     expect((await svc.list('t2', { repository: R })).data).toEqual([]);
   });
+
+  it('?pr_author filtra por author_login (sin mayúsculas) y expone author_login', async () => {
+    pr(1, 'open', { author_login: 'AnaDev' });
+    pr(2, 'merged', { merge_sha: 'd00d1234d00d', author_login: 'bob' });
+    const { data, meta } = await svc.list(T, { project_id: 'shop', pr_author: 'anadev' });
+    expect(data.map((d) => [d.number, d.author_login])).toEqual([[1, 'AnaDev']]);
+    expect(meta.total).toBe(1);
+    expect((await svc.list(T, { repository: R })).data.find((d) => d.number === 3)!.author_login).toBeNull();
+  });
+
+  it('?developer: PRs cuya rama origen tiene sesiones del developer', async () => {
+    store.put({ ...keys.branch(T, R, 'feature/MAG-2'), repository: R, branch: 'feature/MAG-2', session_ids: new Set(['s1']) });
+    store.put({ ...keys.branch(T, R, 'feature/MAG-3'), repository: R, branch: 'feature/MAG-3', session_ids: new Set(['s2']) });
+    store.put({ ...keys.session(T, 's1'), session_id: 's1', developer: 'ana@x.io' });
+    store.put({ ...keys.session(T, 's2'), session_id: 's2', developer: 'bob@x.io' });
+    expect((await svc.list(T, { repository: R, developer: 'ana@x.io' })).data.map((d) => d.number)).toEqual([2]);
+    expect((await svc.list(T, { repository: R, developer: 'ana@x.io', pr_author: 'bob' })).data).toEqual([]);
+  });
 });

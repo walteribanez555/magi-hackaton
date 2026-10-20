@@ -1,5 +1,6 @@
 import { asArray } from '../branches/branches.service';
 import { branchesRepository, type BranchesRepository } from '../branches/branches.repository';
+import { branchRef, developerSessionIds, hasScopeFilters, pullRequestMatches } from '../productivity/productivity.filters';
 import { pullRequestsRepository, type PullRequestsRepository } from './pull-requests.repository';
 import type {
   CommitLite,
@@ -52,6 +53,7 @@ export function toPullRequestListItem(pr: PullRequestItem, commits: CommitLite[]
     head_sha: pr.head_sha,
     merge_sha: pr.merge_sha ?? null,
     url: pr.url,
+    author_login: typeof pr.author_login === 'string' && pr.author_login ? pr.author_login : null,
     opened_at: pr.opened_at ?? null,
     merged_at: pr.merged_at ?? null,
     closed_at: pr.closed_at ?? null,
@@ -81,6 +83,23 @@ export class PullRequestsService {
     private readonly branches: BranchesRepository = branchesRepository,
   ) {}
 
+  /**
+   * ?repository ?developer ?pr_author (AND, productivity.filters): pr_author por author_login;
+   * developer ⇒ PRs cuya rama origen (Branch.session_ids) tiene sesiones de ese developer.
+   */
+  async applyScope(tenantId: string, prs: PullRequestItem[], q: Pick<PullRequestQuery, 'repository' | 'developer' | 'pr_author'>): Promise<PullRequestItem[]> {
+    if (!hasScopeFilters(q)) return prs;
+    let devBranches: Set<string> | undefined;
+    if (q.developer) {
+      const refs = [...new Map(prs.filter((p) => p.source_branch).map((p) => [branchRef(p.repository, p.source_branch), { repository: p.repository, branch: p.source_branch }])).values()];
+      const branchItems = refs.length ? await this.branches.batchGet(tenantId, refs) : [];
+      const ids = [...new Set(branchItems.flatMap((b) => asArray(b.session_ids)))];
+      const devIds = developerSessionIds(ids.length ? await this.branches.sessions(tenantId, ids) : [], q.developer);
+      devBranches = new Set(branchItems.filter((b) => asArray(b.session_ids).some((id) => devIds.has(id))).map((b) => branchRef(b.repository, b.branch)));
+    }
+    return prs.filter((p) => pullRequestMatches(p, q, { devBranches }));
+  }
+
   async listItems(tenantId: string, q: Omit<PullRequestQuery, 'state'>): Promise<PullRequestItem[]> {
     if (q.repository) {
       const items = await this.repo.byRepository(tenantId, q.repository);
@@ -102,7 +121,7 @@ export class PullRequestsService {
   /** GET /pull-requests — totales (open/merged/closed) en meta, calculados ANTES del filtro de estado. */
   async list(tenantId: string, q: PullRequestQuery): Promise<{ data: PullRequestListItem[]; meta: PullRequestTotals }> {
     const raw = await this.listItems(tenantId, q);
-    const unique = [...new Map(raw.map((p) => [`${p.repository}#${p.number}`, p])).values()];
+    const unique = await this.applyScope(tenantId, [...new Map(raw.map((p) => [`${p.repository}#${p.number}`, p])).values()], q);
     const items = (await this.enrich(tenantId, unique)).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     const meta = totalsOf(items);
     return { data: q.state ? items.filter((i) => i.state === q.state) : items, meta };

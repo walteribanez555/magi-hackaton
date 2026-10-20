@@ -15,6 +15,8 @@ const environment: string = app.node.tryGetContext('environment') ?? 'dev';
 const deployMockCtx = app.node.tryGetContext('deployMock');
 const deployMock = deployMockCtx === undefined ? true : String(deployMockCtx) !== 'false';
 const magihubBaseUrl: string | undefined = app.node.tryGetContext('magihubBaseUrl') || undefined;
+// `-c magihubProvider=mock` vuelve al MagiHub SIMULADO; default bedrock (inferencia real).
+const magihubProvider = String(app.node.tryGetContext('magihubProvider') ?? 'bedrock') === 'mock' ? 'mock' : 'bedrock';
 
 // Cuenta/región explícitas: la VPC resuelve las AZ reales (cdk.context.json).
 const env = {
@@ -27,11 +29,12 @@ const main = new MagicodeStack(app, `MagicodeStack-${environment}`, {
   environment,
   deployMock,
   magihubBaseUrl,
+  magihubProvider,
   // `-c demoOpenAccess=false` exige API key también en dev
   demoOpenAccess: String(app.node.tryGetContext('demoOpenAccess') ?? 'true') === 'true',
   // `-c externalDbSecretName=magicode/dev/db-core` → réplica en la caja CoolfixCore (Postgres 14)
   externalDbSecretName: app.node.tryGetContext('externalDbSecretName') || undefined,
-  description: `MagiCode (${environment}): API + proyector Dynamo→RDS + dashboard + MagiHub mock`,
+  description: `MagiCode (${environment}): API + proyector Dynamo→RDS + dashboard + MagiHub (${magihubProvider})`,
 });
 
 // ── Scoring XGBoost (SageMaker Serverless + reentrenamiento) — OPCIONAL ─────────

@@ -10,7 +10,7 @@ Reglas que el código hace cumplir:
 - **Tenant y key salen de la API key** (MagiHub `GET /v1/keys/self`). Cualquier `tenant_id` del cuerpo se descarta.
 - La API key cruda vive solo en el contexto de la petición (para consultar el usage de *esa* key). Se guarda/loguea únicamente `key_id` y la huella `sha256(key)[:12]`. Los logs JSON redactan `Authorization` y valores con forma de key.
 - Nunca se guardan prompts ni código: los eventos solo traen IDs, rutas, conteos y hashes.
-- **Toda cifra es `Measured`** (`value` + `provenance` real/estimated/simulated + `source`). `MAGIHUB_MODE=mock` ⇒ todo token es `simulated`/`magihub-mock`; eventos `source: demo-seed` ⇒ `simulated`.
+- **Toda cifra es `Measured`** (`value` + `provenance` real/estimated/simulated + `source`). `MAGIHUB_MODE=mock` ⇒ todo token es `simulated`/`magihub-mock`; `MAGIHUB_MODE=bedrock` ⇒ `real`/`bedrock` (adaptador Bedrock); eventos `source: demo-seed` ⇒ `simulated`.
 
 ## Estructura
 
@@ -66,7 +66,7 @@ npm run migrate -w @magicode/api                  # up | migrate:down | migrate:
 | `CORS_ORIGINS` | `*` | lista separada por comas |
 | `LOG_LEVEL` | debug (prod: info) | debug \| info \| warn \| error |
 | `MAGIHUB_BASE_URL` | `http://localhost:4010` | base de MagiHub (o del mock) |
-| `MAGIHUB_MODE` | `mock` | `real` \| `mock` (mock ⇒ tokens `simulated`) |
+| `MAGIHUB_MODE` | `mock` | `real` \| `mock` \| `bedrock` (mock ⇒ tokens `simulated`; bedrock ⇒ `real` con source `bedrock`) |
 | `MAGIHUB_USAGE_PATH` / `MAGIHUB_KEYS_SELF_PATH` | `/v1/usage` / `/v1/keys/self` | paths reales configurables |
 | `MAGIHUB_TIMEOUT_MS` | `5000` | timeout de cada llamada |
 | `AUTH_CACHE_TTL_SECONDS` | `300` | caché en memoria de whoami |

@@ -2,7 +2,7 @@
   "name": "@magicode/magihub-mock",
   "version": "0.1.0",
   "private": true,
-  "description": "SIMULADO — implementa el contrato MagiHub (Smart Auto + usage + keys/self) para dev/demo.",
+  "description": "Adaptador MagiHub (Smart Auto + usage + keys/self): Amazon Bedrock real (MAGIHUB_PROVIDER=bedrock) o SIMULADO (mock).",
   "type": "commonjs",
   "scripts": {
     "build": "node esbuild.config.js",

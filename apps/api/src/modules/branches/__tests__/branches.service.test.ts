@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BranchListItem, keys } from '@magicode/contracts';
 import { FakeStore } from '../../webhooks/__tests__/helpers';
+import { PullRequestsRepository } from '../../pull-requests/pull-requests.repository';
 import { BranchesRepository } from '../branches.repository';
 import { BranchesService, toBranchListItem } from '../branches.service';
 
@@ -22,7 +23,7 @@ const branch = (repo: string, name: string, project: string, at: string, o: Reco
 
 beforeEach(() => {
   store = new FakeStore();
-  svc = new BranchesService(new BranchesRepository(store.asRepo()));
+  svc = new BranchesService(new BranchesRepository(store.asRepo()), new PullRequestsRepository(store.asRepo()));
   branch('acme/shop', 'feature/mag-123-login', 'shop', '2026-10-20T10:00:00.000Z', {
     task_keys: new Set(['MAG-123']),
     session_ids: new Set(['s1', 's2']),
@@ -74,5 +75,34 @@ describe('BranchesService.list', () => {
 
   it('aislamiento: otro tenant no ve nada', async () => {
     expect(await svc.list('t2', { repository: 'acme/shop' })).toEqual([]);
+  });
+
+  it('?developer: ramas con sesiones del developer; ?pr_author: ramas origen de sus PRs', async () => {
+    store.put({ ...keys.session(T, 's1'), session_id: 's1', developer: 'ana@x.io' });
+    store.put({ ...keys.session(T, 's2'), session_id: 's2', developer: 'bob@x.io' });
+    store.put({
+      ...keys.pullRequest(T, 'acme/shop', 7),
+      ...keys.pullRequestGsi1(T, 'shop', '2026-10-20T10:00:00.000Z'),
+      repository: 'acme/shop',
+      number: 7,
+      source_branch: 'main',
+      author_login: 'AnaDev',
+    });
+    expect((await svc.list(T, { project_id: 'shop', developer: 'ana@x.io' })).map((b) => b.branch)).toEqual(['feature/mag-123-login']);
+    expect(await svc.list(T, { project_id: 'shop', developer: 'zoe@x.io' })).toEqual([]);
+    expect((await svc.list(T, { project_id: 'shop', pr_author: 'anadev' })).map((b) => b.branch)).toEqual(['main']);
+    expect((await svc.list(T, { repository: 'acme/shop', pr_author: 'anadev' })).map((b) => b.branch)).toEqual(['main']);
+    expect((await svc.list(T, { project_id: 'shop', repository: 'acme/infra' }))).toEqual([]);
+  });
+
+  it('?project_id: excluye ramas y commits ingeridos bajo la integración de OTRO proyecto', async () => {
+    // misma rama del repo reescrita por la integración del proyecto "infra"
+    branch('acme/shop', 'feature/other', 'infra', '2026-10-20T13:00:00.000Z');
+    store.put({ ...keys.commit(T, 'acme/shop', 'a'), sha: 'a', project_id: 'shop' });
+    store.put({ ...keys.commit(T, 'acme/shop', 'b'), sha: 'b', project_id: 'infra' });
+    const out = await svc.list(T, { repository: 'acme/shop', project_id: 'shop' });
+    expect(out.map((b) => b.branch)).toEqual(['main', 'feature/mag-123-login']);
+    // 'b' es de otro proyecto; 'c' no tiene fila Commit (se conserva)
+    expect(out.find((b) => b.branch === 'feature/mag-123-login')!.commits).toBe(2);
   });
 });

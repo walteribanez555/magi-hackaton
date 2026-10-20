@@ -3,6 +3,10 @@ import type { BranchListItem } from '@magicode/contracts';
 export interface BranchQuery {
   project_id?: string;
   repository?: string;
+  /** email de git: ramas con sesiones de ese developer */
+  developer?: string;
+  /** login del autor del PR: ramas origen de sus PRs */
+  pr_author?: string;
   /** incluir ramas borradas en el remoto (default false) */
   include_deleted?: boolean;
 }

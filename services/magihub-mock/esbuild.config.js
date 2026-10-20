@@ -2,7 +2,7 @@ const esbuild = require('esbuild');
 
 const isProduction = process.argv.includes('--prod');
 
-// Lambda: el runtime trae el AWS SDK v3 (solo se usa si MOCK_TABLE_NAME está definido).
+// Lambda: el runtime trae el AWS SDK v3 (DynamoDB si MOCK_TABLE_NAME; Bedrock Runtime en modo bedrock).
 const awsSdkExternalPlugin = {
   name: 'aws-sdk-external',
   setup(build) {

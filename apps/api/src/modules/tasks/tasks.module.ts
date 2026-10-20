@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../../app.types';
 import { BadRequestException, handleException } from '../../common/exceptions';
 import { taskSyncService } from '../task-sync/task-sync.service';
+import { readScopeFilters } from '../productivity/productivity.filters';
 import { tasksService } from './tasks.service';
 import type { StatusCategory } from './tasks.types';
 
@@ -9,7 +10,7 @@ const CATEGORIES: StatusCategory[] = ['todo', 'in_progress', 'done'];
 
 /**
  * Mount path: /api/v1/tasks — detrás del Bearer auth (tenant = c.get('tenant_id')).
- *   GET  /                       ?project_id&status_category → { data: TaskListItem[], meta: { total } }
+ *   GET  /                       ?project_id&repository&developer&pr_author&status_category → { data: TaskListItem[], meta: { total } }
  *   GET  /:taskKey               → { data: TaskListItem & { criticality, linked: { sessions, commits, branches, pull_requests, deployments } } }
  *   GET  /:taskKey/actions       → { data: OutboxAction[] }  (auditoría, más reciente primero)
  *   POST /:taskKey/actions       TaskActionRequest → 202 { data: OutboxAction } | 200 si idempotency_key repetida
@@ -25,6 +26,7 @@ tasksRouter.get('/', async (c) => {
     }
     const data = await tasksService.list(c.get('tenant_id'), {
       project_id: c.req.query('project_id') || undefined,
+      ...readScopeFilters((k) => c.req.query(k)),
       status_category: category as StatusCategory | undefined,
     });
     return c.json({ data, meta: { total: data.length, tokens_provenance: 'estimated' } });

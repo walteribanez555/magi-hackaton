@@ -130,6 +130,7 @@ export interface CommitItem extends BaseItem {
   /** los escribe el webhook push (la proyección del IDE no los pisa) */
   verified_remote?: boolean;
   remote_branch?: string;
+  remote_pushed_at?: string;
   remote_only?: boolean;
   /** el IDE reportó el commit (después del push si remote_only = true) */
   ide_reported_at?: string;

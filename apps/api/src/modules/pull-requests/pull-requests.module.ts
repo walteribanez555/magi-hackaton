@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../../app.types';
 import { BadRequestException, handleException } from '../../common/exceptions';
+import { readScopeFilters } from '../productivity/productivity.filters';
 import { pullRequestsService } from './pull-requests.service';
 import type { PullRequestState } from './pull-requests.types';
 
@@ -8,7 +9,7 @@ const STATES: PullRequestState[] = ['open', 'closed', 'merged'];
 
 /**
  * Mount path: /api/v1/pull-requests — detrás del Bearer auth.
- *   GET / ?project_id&repository&state=open|merged|closed
+ *   GET / ?project_id&repository&developer&pr_author&state=open|merged|closed
  *     → { data: PullRequestListItem[], meta: { total, open, merged, closed, with_ai_lines } }
  */
 export const pullRequestsRouter = new Hono<AppEnv>();
@@ -21,7 +22,7 @@ pullRequestsRouter.get('/', async (c) => {
     }
     const out = await pullRequestsService.list(c.get('tenant_id'), {
       project_id: c.req.query('project_id') || undefined,
-      repository: c.req.query('repository') || undefined,
+      ...readScopeFilters((k) => c.req.query(k)),
       state: state as PullRequestState | undefined,
     });
     return c.json(out);

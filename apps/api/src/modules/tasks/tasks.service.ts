@@ -13,6 +13,14 @@ import { asArray, toBranchListItem } from '../branches/branches.service';
 import { pullRequestsService, type PullRequestsService } from '../pull-requests/pull-requests.service';
 import { pullRequestsRepository, type PullRequestsRepository } from '../pull-requests/pull-requests.repository';
 import type { Item } from '../webhooks/webhooks.repository';
+import {
+  developerSessionIds,
+  hasScopeFilters,
+  prAuthorScope,
+  taskMatches,
+  type PrAuthorScope,
+  type PrFilterRow,
+} from '../productivity/productivity.filters';
 import { tasksRepository, type TasksRepository } from './tasks.repository';
 import type {
   TaskCommitView,
@@ -226,10 +234,13 @@ export class TasksService {
     tenantId: string,
     taskKey: string,
     cache: Map<string, Promise<SessionRows>> = new Map(),
+    opts: { links?: TaskLinkItem[]; sessionFilter?: (sessionId: string) => boolean } = {},
   ): Promise<{ links: TaskLinkItem[]; metrics: TaskMetrics }> {
-    const links = await this.repo.links(tenantId, taskKey);
+    const links = opts.links ?? (await this.repo.links(tenantId, taskKey));
+    // ?developer: tokens/líneas solo de las sesiones de ese developer
+    const ids = sessionIdsOf(links).filter((id) => !opts.sessionFilter || opts.sessionFilter(id));
     const rows = await Promise.all(
-      sessionIdsOf(links).map((id) => {
+      ids.map((id) => {
         let p = cache.get(id);
         if (!p) cache.set(id, (p = this.repo.sessionRows(tenantId, id)));
         return p;
@@ -239,11 +250,37 @@ export class TasksService {
     return { links, metrics: aggregateTaskMetrics(taskKey, rows, tokens) };
   }
 
-  /** GET /tasks?project_id&status_category */
+  /** Contexto de ?developer / ?pr_author: sesiones del developer (cacheadas) y PRs del autor. */
+  private scopeContext(tenantId: string, q: TaskQuery, projects: string[]) {
+    const devCache = new Map<string, boolean>();
+    let pa: Promise<PrAuthorScope | null> | null = null;
+    return {
+      devSessionIds: async (ids: string[]): Promise<Set<string>> => {
+        const missing = ids.filter((id) => !devCache.has(id));
+        if (missing.length && q.developer) {
+          const rows = await this.repo.sessions(tenantId, missing);
+          const mine = developerSessionIds(rows, q.developer);
+          for (const id of missing) devCache.set(id, mine.has(id));
+        }
+        return new Set(ids.filter((id) => devCache.get(id)));
+      },
+      prAuthor: (): Promise<PrAuthorScope | null> =>
+        (pa ??= q.pr_author
+          ? (q.repository
+              ? this.prRepo.byRepository(tenantId, q.repository)
+              : Promise.all(projects.map((p) => this.prRepo.byProject(tenantId, p))).then((x) => x.flat())
+            ).then((prs) => prAuthorScope(prs as PrFilterRow[], q.pr_author!))
+          : Promise.resolve(null)),
+    };
+  }
+
+  /** GET /tasks?project_id&repository&developer&pr_author&status_category */
   async list(tenantId: string, q: TaskQuery): Promise<TaskListItem[]> {
     const projects = q.project_id ? [q.project_id] : await this.branches.projectIds(tenantId);
     const cache = new Map<string, Promise<SessionRows>>();
     const evidence = new Map<string, Promise<RepoEvidence>>();
+    const filtered = hasScopeFilters(q);
+    const scope = this.scopeContext(tenantId, q, projects);
     const perProject = await Promise.all(
       projects.map(async (project) => {
         const [tasks, branchItems] = await Promise.all([
@@ -260,12 +297,21 @@ export class TasksService {
           ...live.map((t) => ({ key: t.task_key, task: t })),
           ...untracked.map((k) => ({ key: k, task: null })),
         ];
-        return Promise.all(
+        const items = await Promise.all(
           entries.map(async ({ key, task }) => {
-            const { links, metrics } = await this.metricsFor(tenantId, key, cache);
+            let opts: Parameters<TasksService['metricsFor']>[3] = {};
+            if (filtered) {
+              // ?repository ?developer ?pr_author (AND) sobre los enlaces de la tarea
+              const links = await this.repo.links(tenantId, key);
+              const devSessionIds = q.developer ? await scope.devSessionIds(sessionIdsOf(links)) : undefined;
+              if (!taskMatches(key, links, q, { pa: await scope.prAuthor(), devSessionIds })) return null;
+              opts = { links, ...(devSessionIds ? { sessionFilter: (id: string) => devSessionIds.has(id) } : {}) };
+            }
+            const { links, metrics } = await this.metricsFor(tenantId, key, cache, opts);
             return buildTaskListItem(key, project, task, links, metrics, await this.deployedFor(tenantId, links, evidence));
           }),
         );
+        return items.filter((x): x is TaskListItem => x !== null);
       }),
     );
     const seen = new Set<string>();
