@@ -7,7 +7,7 @@ import { keys } from '@magicode/contracts';
 import { config } from '../../../config/config';
 import { resetDynamo } from '../../../config/dynamo';
 import { createScoringService } from '../../scoring';
-import { ProductivityService, scoringContextFor } from '../productivity.service';
+import { ProductivityService, scopeTaskKeys, scoringContextFor } from '../productivity.service';
 import { eventTaskKeys, nextChangeStatus, type TransactItem } from '../productivity.projection';
 import type { RuleTrigger } from '@magicode/contracts';
 import type { TriggerInput } from '../../task-sync/task-sync.types';
@@ -383,5 +383,16 @@ describe('session.started / reference.marked — reglas, identidad y claves de t
     const ev2 = env('session.started', { editor: 'v', extension_version: '1', branch: 'feature/mag-5' }) as never;
     expect(eventTaskKeys(ev2)).toEqual(['MAG-5']);
     expect(eventTaskKeys(ev2, ['OPS'])).toEqual([]);
+  });
+});
+
+describe('counts.tasks — mismo universo que GET /tasks (Jira ∪ enlazadas)', () => {
+  const data = { sessions: [{ task_key: 'MAG-1' }, {}], changes: [{ task_key: 'MAG-2' }], commits: [{ task_keys: ['MAG-1', 'MAG-3'] }] };
+  it('une Task de Jira en la ventana con las claves de sesiones/cambios/commits', () => {
+    expect([...scopeTaskKeys({}, data, ['MAG-9', 'MAG-1'])].sort()).toEqual(['MAG-1', 'MAG-2', 'MAG-3', 'MAG-9']);
+  });
+  it('con filtro de sesión/repo/rama solo cuentan las enlazadas; ?task_key la acota', () => {
+    expect([...scopeTaskKeys({ session_id: 's1' }, data, ['MAG-9'])].sort()).toEqual(['MAG-1', 'MAG-2', 'MAG-3']);
+    expect([...scopeTaskKeys({ task_key: 'MAG-2' }, data, ['MAG-9'])]).toEqual(['MAG-2']);
   });
 });

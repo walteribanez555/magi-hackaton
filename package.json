@@ -8,7 +8,8 @@
     "test": "turbo run test",
     "check-types": "turbo run check-types",
     "format": "prettier --write \"**/*.{ts,md,json}\"",
-    "seed:demo": "tsx scripts/seed-demo.ts"
+    "seed:demo": "tsx scripts/seed-demo.ts",
+    "seed:webhooks": "tsx scripts/seed-webhooks.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

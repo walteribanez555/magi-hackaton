@@ -117,8 +117,13 @@ export const ProductivitySummary = z.object({
     pull_requests_merged: z.number(),
     /** Deployments success que cuentan para la etapa `deployed` (SHA del commit o merge/head de su PR) */
     deployments_success: z.number(),
-    /** desde el gestor de tareas (Jira) */
+    /**
+     * tareas DISTINTAS del alcance: Task de Jira/Linear actualizadas en [from, to] ∪ claves enlazadas
+     * a las sesiones/cambios/commits del alcance (incluye "untracked" sin webhook, como GET /tasks).
+     * Con filtro repository/session_id/branch solo cuentan las enlazadas.
+     */
     tasks: z.number(),
+    /** de esas, las que tienen Task con status_category = done */
     tasks_done: z.number(),
   }),
   by_model: z.array(
@@ -179,7 +184,7 @@ export const ChangeListItem = z.object({
   effective_lines: z.number(),
   commit_sha: z.string().nullable(),
   tokens: Measured,
-  /** puntuaciones XGBoost (o heurística) — null hasta que se calculen */
+  /** puntuaciones XGBoost (o heurística 'heuristic:v1') calculadas al ingerir code.accepted; null si falló */
   scores: ChangeScores.nullable(),
   branch: z.string().nullable(),
   task_key: z.string().nullable(),

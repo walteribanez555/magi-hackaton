@@ -124,6 +124,26 @@ export function scoringContextFor(
   };
 }
 
+/**
+ * Claves de tarea del alcance para counts.tasks: Task actualizadas en la ventana (salvo filtro de
+ * repo/sesión/rama) ∪ las enlazadas a sesiones, cambios y commits del alcance; ?task_key la acota.
+ */
+export function scopeTaskKeys(
+  q: Pick<ProductivityQuery, 'repository' | 'session_id' | 'branch' | 'task_key'>,
+  data: { sessions: Array<{ task_key?: string }>; changes: Array<{ task_key?: string }>; commits: Array<{ task_keys?: string[] }> },
+  jiraKeys: string[],
+): Set<string> {
+  const linked = [
+    ...data.sessions.map((s) => s.task_key),
+    ...data.changes.map((c) => c.task_key),
+    ...data.commits.flatMap((c) => c.task_keys ?? []),
+  ];
+  const narrow = !!(q.repository || q.session_id || q.branch);
+  const out = new Set([...(narrow ? [] : jiraKeys), ...linked].filter((k): k is string => !!k));
+  if (q.task_key) for (const k of [...out]) if (k !== q.task_key) out.delete(k);
+  return out;
+}
+
 export interface ProductivityDeps {
   scoring?: ScoringService;
   fireTrigger?: FireTrigger;
@@ -448,18 +468,33 @@ export class ProductivityService {
     return { deployments: parts.flatMap((p) => p.deps), pullRequests: parts.flatMap((p) => p.prs) };
   }
 
-  private async externalCounts(t: string, q: ProductivityQuery, projectIds: string[]) {
-    const prs = (await mapLimit(projectIds, 4, (p) =>
+  /**
+   * PRs con actividad en la ventana y tareas del alcance. counts.tasks = claves DISTINTAS de:
+   * Task (Jira/Linear) actualizadas en [from, to] ∪ tareas enlazadas a las sesiones/cambios/commits
+   * del alcance (TaskLink del IDE, también "untracked" sin webhook) — mismo universo que GET /tasks
+   * acotado a la ventana. tasks_done: las que tienen Task con status_category = done.
+   */
+  private async externalCounts(t: string, q: ProductivityQuery, data: ScopeData) {
+    const prs = (await mapLimit(data.projectIds, 4, (p) =>
       this.repo.listProjectGsi<{ repository?: string; state?: string }>(t, p, 'PR#', q.from, q.to).catch(() => []),
     )).flat().filter((pr) => !q.repository || pr.repository === q.repository);
-    const tasks = (await mapLimit(projectIds, 4, (p) =>
-      this.repo.listProjectGsi<{ task_key?: string; status_category?: string }>(t, p, 'TASK#', q.from, q.to).catch(() => []),
-    )).flat().filter((tk) => !q.task_key || tk.task_key === q.task_key);
+    type TaskRow = { task_key?: string; status_category?: string; deleted?: boolean };
+    const fromJira = (await mapLimit(data.projectIds, 4, (p) => this.repo.listProjectGsi<TaskRow>(t, p, 'TASK#', q.from, q.to).catch(() => [])))
+      .flat()
+      .filter((tk) => tk.deleted !== true);
+    const keysInScope = scopeTaskKeys(q, data, fromJira.map((x) => x.task_key ?? ''));
+    const known = new Map(fromJira.filter((x) => x.task_key).map((x) => [x.task_key!, x]));
+    const missing = [...keysInScope].filter((k) => !known.has(k));
+    if (missing.length) {
+      const rows = await this.repo.batchGet<TaskRow>(missing.map((k) => keys.task(t, k))).catch(() => [] as TaskRow[]);
+      for (const r of rows) if (r.task_key) known.set(r.task_key, r);
+    }
+    const live = [...keysInScope].filter((k) => known.get(k)?.deleted !== true);
     return {
       pull_requests: prs.length,
       pull_requests_merged: prs.filter((p) => p.state === 'merged').length,
-      tasks: tasks.length,
-      tasks_done: tasks.filter((x) => x.status_category === 'done').length,
+      tasks: live.length,
+      tasks_done: live.filter((k) => known.get(k)?.status_category === 'done').length,
     };
   }
 
@@ -478,7 +513,7 @@ export class ProductivityService {
         : undefined;
     const [{ deployments, pullRequests }, external] = await Promise.all([
       this.deploymentEvidence(t, data.commits),
-      opts.withExternal ? this.externalCounts(t, q, data.projectIds) : Promise.resolve(undefined),
+      opts.withExternal ? this.externalCounts(t, q, data) : Promise.resolve(undefined),
     ]);
     const scope: SummaryScope = {
       tenant_id: t,
