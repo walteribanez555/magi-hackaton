@@ -12,6 +12,7 @@ import { formatAgo } from '@/shared/utils/format';
 import { CreateIntegrationComponent } from './create-integration.component';
 import { HealthPanelComponent } from './health-panel.component';
 import { HealthBlockComponent } from './health-block.component';
+import { RulesTableComponent } from './rules-table.component';
 import { IntegracionesData, type RepoState } from './integraciones.data';
 import { BTN_LINK, BTN_PRIMARY, BTN_QUIET } from './integraciones.ui';
 import { TestPanelComponent } from './test-panel.component';
@@ -24,7 +25,7 @@ const STATUS: Record<Integration['status'], { tone: Tone; label: string }> = {
 
 @Component({
   selector: 'app-integraciones-page',
-  imports: [StatusMarkComponent, CopyButtonComponent, CreateIntegrationComponent, HealthPanelComponent, TestPanelComponent, HealthBlockComponent],
+  imports: [StatusMarkComponent, CopyButtonComponent, CreateIntegrationComponent, HealthPanelComponent, TestPanelComponent, HealthBlockComponent, RulesTableComponent],
   providers: [IntegracionesData],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -118,6 +119,9 @@ const STATUS: Record<Integration['status'], { tone: Tone; label: string }> = {
         [projectId]="st.readiness.project_id"
         (changed)="reloadAll()"
       />
+      @if (st.readiness.tasks_webhook.provider === 'jira' && st.readiness.tasks_webhook.integration_id; as jiraId) {
+        <app-rules-table [integrationId]="jiraId" />
+      }
       @if (st.derived) {
         <p class="m-0 mt-3 text-xs text-muted">Estado calculado a partir de la lista de integraciones: el servicio de salud no respondió.</p>
       }

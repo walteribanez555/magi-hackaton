@@ -68,8 +68,12 @@ describe('computeSummary — embudo y tokens', () => {
 
   it('desglose: aceptados, exploración, regeneraciones redundantes, mecánico', () => {
     expect(s.tokens.on_accepted.value).toBe(1000);
-    expect(s.tokens.on_rejected.value).toBe(1000); // r2 + r3 (sin cambio aceptado)
+    expect(s.tokens.on_rejected.value).toBe(400); // r2 (r3 es regeneración redundante: va aparte)
     expect(s.tokens.on_redundant_regenerations.value).toBe(600); // r3 repite el output_hash de r1
+    // partición: las partes suman Σ tokens por petición
+    expect(s.tokens.on_accepted.value! + s.tokens.on_rejected.value! + s.tokens.on_redundant_regenerations.value!).toBe(
+      s.tokens.reported_by_requests.value,
+    );
     expect(s.tokens.on_mechanical.value).toBe(200); // 1000 × 4/20
     expect(s.tokens.on_mechanical.provenance).toBe('estimated');
     expect(s.dimensions.redundancy.redundant_regenerations).toBe(1);
@@ -312,20 +316,22 @@ describe('in_reference por included_shas', () => {
   const SHA2 = 'b'.repeat(40);
   it('solo cuentan los commits incluidos en el tag; se reparte surviving_lines entre ellos', () => {
     const commits = [commit(SHA1, ['c1'], 10), commit(SHA2, ['c2'], 30, { committed_at: '2026-10-20T10:35:00.000Z' })];
+    const changes = [accepted('c1', 'r1', 10), accepted('c2', 'r2', 30)];
     // el tag solo incluye SHA1; surviving 8 de sus 10 líneas
-    const s = computeSummary(input({ commits, references: [ref('v1', 8, { included_shas: [SHA1], surviving_effective_lines: 6 })] }));
+    const s = computeSummary(input({ changes, commits, references: [ref('v1', 8, { included_shas: [SHA1], surviving_effective_lines: 6 })] }));
     expect(s.funnel[3]!.lines.value).toBe(8);
     expect(s.funnel[3]!.effective_lines.value).toBe(6);
     // un tag posterior que incluye ambos manda para los dos (no se suman los tags)
     const s2 = computeSummary(
       input({
+        changes,
         commits,
         references: [ref('v1', 8, { included_shas: [SHA1] }), ref('v2', 36, { included_shas: [SHA1, SHA2], occurred_at: '2026-10-20T11:00:00.000Z' })],
       }),
     );
     expect(s2.funnel[3]!.lines.value).toBe(36);
     // referencia sin included_shas ⇒ 0 (no se cuentan líneas de commits que no están en el tag)
-    expect(computeSummary(input({ commits, references: [ref('v0', 40)] })).funnel[3]!.lines.value).toBe(0);
+    expect(computeSummary(input({ changes, commits, references: [ref('v0', 40)] })).funnel[3]!.lines.value).toBe(0);
   });
 });
 
@@ -383,5 +389,35 @@ describe('SessionListItem.tokens — misma imputación que el summary', () => {
 
     expect(computeSessionItems({ ...scenario(), magihubMode: 'mock' })[0]!.tokens.provenance).toBe('simulated');
     expect(computeSessionItems({ ...scenario(), usage: null })[0]!.tokens).toMatchObject({ value: 2000, provenance: 'estimated' });
+  });
+});
+
+describe('embudo monótono: ninguna etapa supera a la anterior', () => {
+  it('committed se topa en las no triviales aceptadas de sus cambios (hashes repetidos, cambios fuera del alcance)', () => {
+    // 32 no triviales aceptadas, pero el commit casó 39 hashes (duplicados legítimos)
+    const changes = [accepted('c1', 'r1', 40, { d: { trivial: 8 } })];
+    const commits = [commit(SHA1, ['c1', 'fuera-de-ventana'], 39, { automation: { commit_added_lines: 50, ai_matched_lines: 39, ai_share: 0.78, ai_lost_lines: 0, effective_lines: 26 } })];
+    const s = computeSummary(input({ changes, commits, references: [ref('v1', 39, { included_shas: [SHA1], surviving_effective_lines: 26 })] }));
+    const lines = s.funnel.map((f) => f.lines.value!);
+    expect(lines.slice(1, 4)).toEqual([32, 32, 32]);
+    expect(s.funnel[2]!.conversion.value).toBe(1);
+    expect(s.funnel[2]!.effective_lines.value).toBeCloseTo(26 * (32 / 39), 4);
+    expect(s.funnel[2]!.lines.note).toMatch(/tope/);
+    for (let i = 1; i < lines.length; i++) expect(lines[i]).toBeLessThanOrEqual(lines[i - 1]!);
+  });
+
+  it('un cambio partido en 2 commits no se cuenta dos veces', () => {
+    const changes = [accepted('c1', 'r1', 10)];
+    const commits = [
+      commit(SHA1, ['c1'], 8),
+      commit('b'.repeat(40), ['c1'], 8, { committed_at: '2026-10-20T10:45:00.000Z' }),
+    ];
+    expect(computeSummary(input({ changes, commits })).funnel[2]!.lines.value).toBe(10);
+  });
+
+  it('generated nunca menor que accepted (el usuario agregó líneas al editar)', () => {
+    const s = computeSummary(input({ changes: [accepted('c1', 'r1', 20, { proposed_added_lines: 12, d: { trivial: 4 } })] }));
+    expect(s.funnel[0]!.lines.value).toBe(16);
+    expect(s.funnel[1]!.lines.value).toBe(16);
   });
 });
