@@ -160,8 +160,11 @@ describe('transiciones de estado del cambio', () => {
     expect(statuses).toEqual(['proposed', 'accepted', 'committed', 'in_reference']);
     const committed = updatesOf('C#c1')[2]!;
     expect(setValue(committed, 'commit_sha')).toBe(SHA);
-    const commitPut = writes().find((w) => w.Put?.Item?.SK === `COMMIT#${SHA}`)!;
-    expect(commitPut.Put!.Item).toMatchObject({ GSI1PK: keys.sessionPk('tenant-a', 's1'), GSI1SK: `COMMIT#${t0}4.000Z`, entity: 'Commit' });
+    // commit: UpdateItem (no Put) para no pisar verified_remote / remote_* del webhook push
+    const commitUpd = updatesOf(`COMMIT#${SHA}`).find((u) => setValue(u, 'entity') === 'Commit')!;
+    expect(setValue(commitUpd, 'GSI1PK')).toBe(keys.sessionPk('tenant-a', 's1'));
+    expect(setValue(commitUpd, 'GSI1SK')).toBe(`COMMIT#${t0}4.000Z`);
+    expect(writes().some((w) => w.Put?.Item?.SK === `COMMIT#${SHA}`)).toBe(false);
     expect(writes().some((w) => w.Put?.Item?.SK === 'REF#demo-v1')).toBe(true);
     // AiRequest con GSI1 por key
     const req = writes().find((w) => w.Put?.Item?.SK === 'R#req-1')!;

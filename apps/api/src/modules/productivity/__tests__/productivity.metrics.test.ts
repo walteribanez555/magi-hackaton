@@ -13,6 +13,8 @@ import {
 } from '../productivity.metrics';
 import { accepted, change, commit, input, ref, request, session, usageRec } from './fixtures';
 
+const SHA1 = 'a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0';
+
 /** Escenario base: 3 peticiones (una redundante), 1 aceptado, 1 rechazado, 1 solo propuesto. */
 const scenario = () => {
   const requests = [
@@ -25,8 +27,8 @@ const scenario = () => {
     change('c2', 'r2', { status: 'rejected', proposed_added_lines: 8 }),
     change('c3', 'r3', { proposed_added_lines: 5 }),
   ];
-  const commits = [commit('a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0', ['c1'], 18)];
-  const references = [ref('demo-v1', 15)];
+  const commits = [commit(SHA1, ['c1'], 18)];
+  const references = [ref('demo-v1', 15, { included_shas: [SHA1] })];
   const usage = {
     granularity: 'request' as const,
     provenance: 'real' as const,
@@ -199,7 +201,7 @@ describe('etapa desplegado', () => {
     expect(s1.funnel[4]!.lines.value).toBe(0);
     const s2 = computeSummary({
       ...base,
-      references: [...base.references, ref('prod-1', 12, { kind: 'deployment', evidence_url: 'https://ci/x', occurred_at: '2026-10-20T11:00:00.000Z' })],
+      references: [...base.references, ref('prod-1', 12, { kind: 'deployment', evidence_url: 'https://ci/x', occurred_at: '2026-10-20T11:00:00.000Z', included_shas: [SHA1] })],
     });
     expect(s2.funnel[4]!.lines).toMatchObject({ value: 12, source: 'deployment-evidence' });
   });

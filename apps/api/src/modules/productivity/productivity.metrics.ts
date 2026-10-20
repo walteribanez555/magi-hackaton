@@ -13,13 +13,16 @@ import type {
   TimelinePoint,
   TokenBreakdown,
 } from '@magicode/contracts';
+import { deploymentsOfCommit, sameRepository, shaPrefixEq } from '../../common/utils/deployment-evidence';
 import type {
   AiRequestItem,
   ChangeItem,
   CommitItem,
   DeploymentEvidence,
   MetricsInput,
+  PullRequestRef,
   ReferenceMark,
+  UsageInput,
 } from './productivity.types';
 
 /**
@@ -67,11 +70,62 @@ const telemetrySource = (xs: Array<{ source?: string }>): DataSource =>
 const ACCEPTED_STATUSES = new Set(['accepted', 'committed', 'in_reference']);
 export const isAccepted = (c: ChangeItem): boolean => ACCEPTED_STATUSES.has(c.status);
 
-const shaEq = (a: string, b: string): boolean => {
-  const x = a.toLowerCase();
-  const y = b.toLowerCase();
-  return x.startsWith(y) || y.startsWith(x);
+const shaEq = (a: string, b: string): boolean => shaPrefixEq(a, b);
+
+// ── Unidades (metrics-model §2.5: líneas agregadas no vacías y NO triviales) ──────────
+
+/**
+ * Líneas no triviales aceptadas de un cambio = importance.lines − by_kind.trivial.
+ * Sin `dimensions` (stub creado por el commit antes del accepted) ⇒ accepted_added_lines, cota
+ * superior (`exact = false`).
+ */
+export function acceptedNonTrivial(c: ChangeItem): { lines: number; exact: boolean } {
+  const imp = c.dimensions?.importance;
+  if (imp) return { lines: Math.max(0, imp.lines - (imp.by_kind?.trivial ?? 0)), exact: true };
+  return { lines: c.accepted_added_lines ?? 0, exact: false };
+}
+
+/** Σ líneas no triviales aceptadas (unidad del embudo). */
+export const sumAcceptedNonTrivial = (changes: ChangeItem[]): number => sum(changes.filter(isAccepted), (c) => acceptedNonTrivial(c).lines);
+
+const trivialRatio = (cs: ChangeItem[]): number | null => {
+  const withDims = cs.filter((c) => isAccepted(c) && c.dimensions);
+  const lines = sum(withDims, (c) => c.dimensions!.importance.lines);
+  return lines > 0 ? sum(withDims, (c) => c.dimensions!.importance.by_kind?.trivial) / lines : null;
 };
+
+/**
+ * Líneas no triviales PROPUESTAS. code.proposed solo trae files[].added (sin by_kind), así que:
+ *  - cambio aceptado con dimensions y mismas líneas que lo propuesto ⇒ exacto (lines − trivial);
+ *  - aceptado con dimensions pero editado ⇒ propuestas × (1 − su proporción trivial);
+ *  - sin dimensions (rechazado/solo propuesto) ⇒ propuestas × (1 − proporción trivial de lo
+ *    aceptado en la MISMA sesión; si la sesión no aceptó nada, la del alcance; si tampoco, 0).
+ * Cualquier estimación ⇒ provenance `estimated`. `upperBound` = no hubo proporción de referencia.
+ */
+export function generatedNonTrivial(changes: ChangeItem[]): { lines: number; estimated: boolean; upperBound: boolean } {
+  const bySession = new Map<string, ChangeItem[]>();
+  for (const c of changes) bySession.set(c.session_id, [...(bySession.get(c.session_id) ?? []), c]);
+  const globalRatio = trivialRatio(changes);
+  let lines = 0;
+  let estimated = false;
+  let upperBound = false;
+  for (const c of changes) {
+    const proposed = c.proposed_added_lines ?? c.accepted_added_lines ?? 0;
+    const imp = c.dimensions?.importance;
+    if (imp && proposed === imp.lines) {
+      lines += Math.max(0, imp.lines - (imp.by_kind?.trivial ?? 0));
+      continue;
+    }
+    estimated = true;
+    let ratio = imp && imp.lines > 0 ? (imp.by_kind?.trivial ?? 0) / imp.lines : trivialRatio(bySession.get(c.session_id) ?? []) ?? globalRatio;
+    if (ratio === null) {
+      upperBound = true;
+      ratio = 0;
+    }
+    lines += Math.round(proposed * (1 - ratio));
+  }
+  return { lines, estimated, upperBound };
+}
 
 // ── Tokens por petición ──────────────────────────────────────────────────────
 
@@ -150,8 +204,44 @@ export function redundantRegenerations(requests: AiRequestItem[]): AiRequestItem
 
 // ── Total (fuente de verdad) ─────────────────────────────────────────────────
 
-function totalTokens(input: MetricsInput, reported: Measured): { total: Measured; fromUsage: boolean } {
-  const { usage, magihubMode } = input;
+/** Σ usage reportado en las respuestas de Smart Auto (para reconciliar y como respaldo). */
+export function reportedTokens(requests: AiRequestItem[], mode: MetricsInput['magihubMode']): Measured {
+  const withUsage = requests.filter((r) => r.usage);
+  const prov: Provenance = withUsage.length
+    ? worst(...withUsage.map((r) => reportedProvenance(r, mode)))
+    : mode === 'mock'
+      ? 'simulated'
+      : 'real';
+  return m(sum(withUsage, (r) => r.usage!.total_tokens), prov, prov === 'simulated' ? 'magihub-mock' : 'magihub-response');
+}
+
+export interface AllocationInput {
+  usage: UsageInput | null;
+  magihubMode: MetricsInput['magihubMode'];
+  /** peticiones del alcance (sesión, tarea, proyecto…) */
+  requests: AiRequestItem[];
+  /** todas las peticiones de la key en la ventana (denominador del prorrateo hora/día) */
+  keyRequests?: AiRequestItem[];
+  /** false ⇒ toda la key: el total es Σ de la API de consumo */
+  scoped: boolean;
+}
+
+/**
+ * Regla ÚNICA de imputación de la API de consumo a un alcance (summary, SessionListItem.tokens,
+ * TaskListItem.tokens — docs/kb/tokens.md):
+ *  - sin API de consumo (o sin registros con usage reportado > 0) ⇒ Σ usage reportado, `estimated`;
+ *  - toda la key ⇒ Σ registros (real; simulated con el mock);
+ *  - granularity=request ⇒ Σ registros cuyo request_id es del alcance; las peticiones sin registro
+ *    (retraso de ingesta) suman su usage reportado y la cifra pasa a `estimated`;
+ *  - hora/día ⇒ cada ventana se prorratea por usage reportado del alcance / de la key ⇒ `estimated`.
+ */
+export function allocateUsage(a: AllocationInput): { total: Measured; reported: Measured; fromUsage: boolean } {
+  const reported = reportedTokens(a.requests, a.magihubMode);
+  return { ...allocate(a, reported), reported };
+}
+
+function allocate(a: AllocationInput, reported: Measured): { total: Measured; fromUsage: boolean } {
+  const { usage, magihubMode } = a;
   const sim = magihubMode === 'mock';
   const reportedValue = reported.value ?? 0;
   const fallbackNeeded = !usage || (usage.records.length === 0 && reportedValue > 0);
@@ -170,19 +260,32 @@ function totalTokens(input: MetricsInput, reported: Measured): { total: Measured
   }
   const prov: Provenance = sim ? 'simulated' : usage.provenance;
   const src: DataSource = sim ? 'magihub-mock' : usage.source;
-  if (!input.scoped) {
+  if (!a.scoped) {
     return { total: m(sum(usage.records, (r) => r.usage.total_tokens), prov, src), fromUsage: true };
   }
-  const ids = new Set(input.requests.map((r) => r.ai_request_id));
   if (usage.granularity === 'request') {
+    const recIds = new Set(usage.records.map((r) => r.request_id).filter(Boolean));
+    const ids = new Set(a.requests.map((r) => r.ai_request_id));
     const v = sum(
       usage.records.filter((r) => r.request_id && ids.has(r.request_id)),
       (r) => r.usage.total_tokens,
     );
+    const missing = a.requests.filter((r) => !recIds.has(r.ai_request_id) && r.usage);
+    if (missing.length) {
+      return {
+        total: m(
+          v + sum(missing, (r) => r.usage!.total_tokens),
+          worst(prov, 'estimated'),
+          src,
+          `${missing.length} petición(es) aún sin registro en la API de consumo: se suma su usage reportado.`,
+        ),
+        fromUsage: true,
+      };
+    }
     return { total: m(v, prov, src, 'Consumo por request_id de las peticiones del alcance.'), fromUsage: true };
   }
   // Granularidad hora/día: se prorratea cada ventana por la parte reportada del alcance.
-  const all = input.keyRequests ?? input.requests;
+  const all = a.keyRequests ?? a.requests;
   let v = 0;
   for (const rec of usage.records) {
     const ws = Date.parse(rec.window_start);
@@ -192,7 +295,7 @@ function totalTokens(input: MetricsInput, reported: Measured): { total: Measured
       return t >= ws && t < we;
     };
     const keyRep = sum(all.filter(inBucket), (r) => r.usage?.total_tokens);
-    const scopeRep = sum(input.requests.filter(inBucket), (r) => r.usage?.total_tokens);
+    const scopeRep = sum(a.requests.filter(inBucket), (r) => r.usage?.total_tokens);
     if (keyRep > 0) v += rec.usage.total_tokens * (scopeRep / keyRep);
   }
   return {
@@ -231,21 +334,48 @@ interface StageLines {
   effective: Measured;
 }
 
-/** Última referencia por sesión (opcionalmente solo kind=deployment). */
-function latestPerSession(refs: ReferenceMark[], onlyDeployment = false): ReferenceMark[] {
-  const by = new Map<string, ReferenceMark>();
-  for (const r of refs) {
-    if (onlyDeployment && r.kind !== 'deployment') continue;
-    const cur = by.get(r.session_id);
-    if (!cur || r.occurred_at > cur.occurred_at) by.set(r.session_id, r);
-  }
-  return [...by.values()];
+/**
+ * Commits con evidencia de despliegue: Deployment success del mismo repo cuyo SHA es el del commit
+ * o el merge_sha/head_sha de un PR cuya rama origen contiene el commit (common/utils/deployment-evidence).
+ */
+export function deployedCommits(commits: CommitItem[], deployments: DeploymentEvidence[], prs: PullRequestRef[] = []): CommitItem[] {
+  return commits.filter((c) => deploymentsOfCommit(c, deployments, prs).length > 0);
 }
 
-/** Commits con evidencia de despliegue exitoso (Deployment state=success, mismo repo + SHA). */
-export function deployedCommits(commits: CommitItem[], deployments: DeploymentEvidence[]): CommitItem[] {
-  const ok = deployments.filter((d) => d.state === 'success');
-  return commits.filter((c) => ok.some((d) => d.repository === c.repository && shaEq(d.sha, c.sha)));
+/** ¿La referencia incluye el commit? (mismo repo + SHA ∈ included_shas, por prefijo). */
+const refIncludes = (r: ReferenceMark, c: CommitItem): boolean =>
+  sameRepository(r.repository, c.repository) && r.included_shas.some((s) => shaEq(s, c.sha));
+
+/**
+ * Líneas IA de cada commit presentes en una referencia (in_reference o deployed):
+ * se toma la referencia MÁS RECIENTE que incluye el commit en `included_shas` y se reparte su
+ * `surviving_lines` entre los commits conocidos que incluye, en proporción a sus ai_matched_lines
+ * (tope: las del propio commit). Un commit que no está en included_shas no aporta nada.
+ */
+export function referenceLinesByCommit(commits: CommitItem[], refs: ReferenceMark[]): Map<CommitItem, { lines: number; effective: number; ref: ReferenceMark }> {
+  const out = new Map<CommitItem, { lines: number; effective: number; ref: ReferenceMark }>();
+  const denom = new Map<ReferenceMark, { lines: number; effective: number }>();
+  const denomOf = (r: ReferenceMark) => {
+    let d = denom.get(r);
+    if (!d) {
+      const inc = commits.filter((c) => refIncludes(r, c));
+      d = { lines: sum(inc, (c) => c.automation.ai_matched_lines), effective: sum(inc, (c) => c.automation.effective_lines) };
+      denom.set(r, d);
+    }
+    return d;
+  };
+  for (const c of commits) {
+    const latest = refs.filter((r) => refIncludes(r, c)).sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))[0];
+    if (!latest) continue;
+    const d = denomOf(latest);
+    const share = (own: number, total: number, surviving: number) => (total > 0 ? own * Math.min(1, surviving / total) : 0);
+    out.set(c, {
+      lines: share(c.automation.ai_matched_lines, d.lines, latest.surviving_lines),
+      effective: share(c.automation.effective_lines, d.effective, latest.surviving_effective_lines),
+      ref: latest,
+    });
+  }
+  return out;
 }
 
 function stageLines(input: MetricsInput): StageLines[] {
@@ -253,16 +383,32 @@ function stageLines(input: MetricsInput): StageLines[] {
   const accepted = changes.filter(isAccepted);
 
   const genProv = itemsProvenance(changes);
+  const gen = generatedNonTrivial(changes);
   const generated: StageLines = {
     stage: 'generated',
-    lines: m(sum(changes, (c) => c.proposed_added_lines ?? c.accepted_added_lines), genProv, telemetrySource(changes)),
+    lines: m(
+      gen.lines,
+      gen.estimated ? worst(genProv, 'estimated') : genProv,
+      telemetrySource(changes),
+      gen.upperBound
+        ? 'Propuestas sin proporción trivial de referencia: cota superior (incluye líneas triviales).'
+        : gen.estimated
+          ? 'No triviales estimadas: lo propuesto × (1 − proporción trivial de lo aceptado en la sesión).'
+          : undefined,
+    ),
     effective: m(null, worst(genProv, 'estimated'), telemetrySource(changes), 'Las 3 aristas se calculan al aceptar.'),
   };
 
   const accProv = itemsProvenance(accepted);
+  const accExact = accepted.every((c) => acceptedNonTrivial(c).exact);
   const acc: StageLines = {
     stage: 'accepted',
-    lines: m(sum(accepted, (c) => c.accepted_added_lines), accProv, telemetrySource(accepted)),
+    lines: m(
+      sum(accepted, (c) => acceptedNonTrivial(c).lines),
+      accExact ? accProv : worst(accProv, 'estimated'),
+      telemetrySource(accepted),
+      accExact ? 'Líneas agregadas no triviales (importance.lines − trivial).' : 'Cambios sin dimensions: se usan sus líneas agregadas (cota superior).',
+    ),
     effective: m(
       sum(accepted, (c) => c.dimensions?.effective_lines),
       worst(accProv, 'estimated'),
@@ -283,35 +429,46 @@ function stageLines(input: MetricsInput): StageLines[] {
     effective: m(sum(commits, (c) => c.automation.effective_lines), comProv, gitSrc),
   };
 
-  const refs = latestPerSession(references);
-  const refProv = worst(itemsProvenance(refs), 'estimated');
+  // En versión de referencia: solo commits incluidos (included_shas) en una referencia.
+  const inRefByCommit = referenceLinesByCommit(commits, references);
+  const refsUsed = [...new Set([...inRefByCommit.values()].map((x) => x.ref))];
+  const refProv = worst(itemsProvenance(refsUsed), 'estimated');
   const inRef: StageLines = {
     stage: 'in_reference',
-    lines: m(sum(refs, (r) => r.surviving_lines), refProv, 'declared-reference', 'Versión de referencia (demo): última referencia por sesión.'),
-    effective: m(sum(refs, (r) => r.surviving_effective_lines), refProv, 'declared-reference'),
+    lines: m(
+      Math.round(sum([...inRefByCommit.values()], (x) => x.lines)),
+      refProv,
+      'declared-reference',
+      'Versión de referencia (demo): líneas sobrevivientes de los commits incluidos en el tag (included_shas).',
+    ),
+    effective: m(sum([...inRefByCommit.values()], (x) => x.effective), refProv, 'declared-reference'),
   };
 
-  // Desplegado: SOLO referencias kind=deployment (con evidence_url) o commits con Deployment success.
-  const depRefs = new Map(latestPerSession(references, true).map((r) => [r.session_id, r]));
-  const depCommits = deployedCommits(commits, deployments);
-  const sessionIds = new Set([...depRefs.keys(), ...depCommits.map((c) => c.session_id)]);
+  // Desplegado: por commit, máx(referencia kind=deployment que lo incluye, Deployment success del
+  // commit o del merge/head de su PR).
+  const depByRef = referenceLinesByCommit(commits, references.filter((r) => r.kind === 'deployment'));
+  const depCommits = new Set(deployedCommits(commits, deployments, input.pullRequests));
   let depLines = 0;
   let depEff = 0;
-  for (const s of sessionIds) {
-    const ref = depRefs.get(s);
-    const cs = depCommits.filter((c) => c.session_id === s);
-    depLines += Math.max(ref?.surviving_lines ?? 0, sum(cs, (c) => c.automation.ai_matched_lines));
-    depEff += Math.max(ref?.surviving_effective_lines ?? 0, sum(cs, (c) => c.automation.effective_lines));
+  const depItems: Array<{ provenance?: Provenance }> = [];
+  for (const c of commits) {
+    const r = depByRef.get(c);
+    const ev = depCommits.has(c);
+    if (!r && !ev) continue;
+    depLines += Math.max(r?.lines ?? 0, ev ? c.automation.ai_matched_lines : 0);
+    depEff += Math.max(r?.effective ?? 0, ev ? c.automation.effective_lines : 0);
+    depItems.push(c);
+    if (r) depItems.push(r.ref);
   }
-  const depProv = worst(itemsProvenance([...depRefs.values()]), itemsProvenance(depCommits), 'estimated');
+  const depProv = worst(itemsProvenance(depItems), 'estimated');
   const deployed: StageLines = {
     stage: 'deployed',
     lines: m(
-      depLines,
+      Math.round(depLines),
       depProv,
       'deployment-evidence',
-      sessionIds.size
-        ? 'Evidencia real de despliegue; líneas IA por coincidencia de hash.'
+      depItems.length
+        ? 'Evidencia real de despliegue (SHA del commit o merge/head de su PR); líneas IA por coincidencia de hash.'
         : 'Sin evidencia de despliegue (solo cuenta reference kind=deployment o Deployment success).',
     ),
     effective: m(depEff, depProv, 'deployment-evidence'),
@@ -367,9 +524,10 @@ function dimensionsSummary(input: MetricsInput, redundantCount: number): Dimensi
   const aiMatched = sum(input.commits, (c) => c.automation.ai_matched_lines);
   const aiLost = sum(input.commits, (c) => c.automation.ai_lost_lines);
   const committedChangeIds = new Set(input.commits.flatMap((c) => c.change_ids));
+  // misma unidad que ai_lost_lines: líneas no triviales aceptadas de los cambios commiteados
   const acceptedInCommits = sum(
     accepted.filter((c) => committedChangeIds.has(c.change_id)),
-    (c) => c.accepted_added_lines,
+    (c) => acceptedNonTrivial(c).lines,
   );
   const gitProv = worst(itemsProvenance(input.commits), 'estimated');
   const gitSrc: DataSource = input.commits.some((c) => c.source === 'demo-seed') ? 'demo-seed' : 'git-local';
@@ -390,7 +548,7 @@ function dimensionsSummary(input: MetricsInput, redundantCount: number): Dimensi
         ratio(aiLost, acceptedInCommits),
         gitProv,
         gitSrc,
-        'Líneas IA aceptadas de cambios commiteados que no aparecen en el commit.',
+        'ai_lost_lines / líneas no triviales aceptadas de los cambios commiteados.',
       ),
       accepted_as_is: sum(withDims, (c) => c.dimensions!.automation.accepted_as_is),
       edited_before_accept: sum(withDims, (c) => c.dimensions!.automation.edited_before_accept),
@@ -432,19 +590,7 @@ export interface ComputedTokens {
 
 export function computeTokens(input: MetricsInput): ComputedTokens {
   const perRequest = resolveRequestTokens(input);
-  const sim = input.magihubMode === 'mock';
-  const withUsage = input.requests.filter((r) => r.usage);
-  const repProv = withUsage.length
-    ? worst(...withUsage.map((r) => reportedProvenance(r, input.magihubMode)))
-    : sim
-      ? 'simulated'
-      : 'real';
-  const reported = m(
-    sum(withUsage, (r) => r.usage!.total_tokens),
-    repProv,
-    repProv === 'simulated' ? 'magihub-mock' : 'magihub-response',
-  );
-  const { total, fromUsage } = totalTokens(input, reported);
+  const { total, reported, fromUsage } = allocateUsage(input);
   const unreconciled = fromUsage
     ? m(
         (total.value ?? 0) - (reported.value ?? 0),
@@ -518,14 +664,14 @@ export function computeSummary(input: MetricsInput): ProductivitySummary {
       tokens: sumRequests(reqs, perRequest, breakdown.total),
       accepted_lines: sum(
         accepted.filter((c) => c.ai_request_id && ids.has(c.ai_request_id)),
-        (c) => c.accepted_added_lines,
+        (c) => acceptedNonTrivial(c).lines,
       ),
     };
   });
 
   const depSuccess = new Set(
-    input.deployments
-      .filter((d) => d.state === 'success' && input.commits.some((c) => c.repository === d.repository && shaEq(c.sha, d.sha)))
+    input.commits
+      .flatMap((c) => deploymentsOfCommit(c, input.deployments, input.pullRequests ?? []))
       .map((d) => d.deployment_id ?? `${d.repository}@${d.sha}`),
   );
 
@@ -596,7 +742,7 @@ export function computeTimeline(input: MetricsInput, bucket: 'hour' | 'day'): Ti
   for (const c of input.changes.filter(isAccepted)) {
     const p = at(c.accepted_at ?? c.first_seen_at);
     if (!p) continue;
-    p.accepted_lines += c.accepted_added_lines ?? 0;
+    p.accepted_lines += acceptedNonTrivial(c).lines;
     p.effective_lines = round(p.effective_lines + (c.dimensions?.effective_lines ?? 0));
   }
   for (const c of input.commits) {
@@ -624,8 +770,8 @@ export function highestStage(changes: ChangeItem[], deployedShas: Set<string> = 
 
 /** GET /productivity/sessions */
 export function computeSessionItems(input: MetricsInput): SessionListItem[] {
-  const { breakdown, perRequest } = computeTokens(input);
-  const deployedShas = new Set(deployedCommits(input.commits, input.deployments).map((c) => c.sha));
+  const deployedShas = new Set(deployedCommits(input.commits, input.deployments, input.pullRequests).map((c) => c.sha));
+  const keyRequests = input.keyRequests ?? input.requests;
   return input.sessions
     .map((s) => {
       const reqs = input.requests.filter((r) => r.session_id === s.session_id);
@@ -640,8 +786,9 @@ export function computeSessionItems(input: MetricsInput): SessionListItem[] {
         started_at: s.started_at,
         ended_at: s.ended_at ?? null,
         ai_requests: reqs.length,
-        tokens: sumRequests(reqs, perRequest, breakdown.total),
-        accepted_lines: sum(accepted, (c) => c.accepted_added_lines),
+        // misma imputación que el summary?session_id (por request_id o prorrateo por ventana)
+        tokens: allocateUsage({ usage: input.usage, magihubMode: input.magihubMode, requests: reqs, keyRequests, scoped: true }).total,
+        accepted_lines: sum(accepted, (c) => acceptedNonTrivial(c).lines),
         effective_lines: round(sum(accepted, (c) => c.dimensions?.effective_lines)),
         commits: input.commits.filter((c) => c.session_id === s.session_id).map((c) => c.sha),
         highest_stage: highestStage(changes, deployedShas),

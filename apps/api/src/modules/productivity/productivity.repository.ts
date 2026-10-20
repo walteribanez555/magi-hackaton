@@ -3,7 +3,9 @@ import {
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
   type QueryCommandInput,
+  type UpdateCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { ENTITY, keys } from '@magicode/contracts';
 import { getDynamo, tableName } from '../../config/dynamo';
@@ -14,6 +16,7 @@ import type {
   ChangeItem,
   CommitItem,
   DeploymentEvidence,
+  PullRequestRef,
   ReferenceMark,
   SessionItem,
 } from './productivity.types';
@@ -63,6 +66,11 @@ export class ProductivityRepository {
   async transactWrite(items: TransactItem[]): Promise<void> {
     if (!items.length) return;
     await this.db.send(new TransactWriteCommand({ TransactItems: items }));
+  }
+
+  /** UpdateItem suelto (p. ej. `scores` del Change con attribute_exists). */
+  async update(input: UpdateCommandInput): Promise<void> {
+    await this.db.send(new UpdateCommand({ ...input, TableName: input.TableName ?? this.table }));
   }
 
   private async queryAll<T>(input: Omit<QueryCommandInput, 'TableName'>, limitPages = MAX_PAGES): Promise<T[]> {
@@ -197,6 +205,31 @@ export class ProductivityRepository {
           KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :p)',
           ExpressionAttributeValues: { ':pk': pk, ':p': prefix },
         });
+  }
+
+  /** AiRequest (R#) o Change (C#) de una sesión con lectura consistente (contexto de scoring). */
+  listSessionPrefix<T>(t: string, sessionId: string, prefix: 'R#' | 'C#'): Promise<T[]> {
+    return this.queryAll<T>({
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+      ExpressionAttributeValues: { ':pk': keys.sessionPk(t, sessionId), ':sk': prefix },
+      ConsistentRead: true,
+    });
+  }
+
+  /** Deployments de un repo (PK repo · DEPLOY#): se comparan por prefijo de SHA (commit, merge, head). */
+  listDeploymentsOfRepo(t: string, repo: string): Promise<DeploymentEvidence[]> {
+    return this.queryAll<DeploymentEvidence>({
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+      ExpressionAttributeValues: { ':pk': keys.repoPk(t, repo), ':sk': 'DEPLOY#' },
+    });
+  }
+
+  /** PullRequests de un repo (PK repo · PR#) para la regla de despliegue del merge commit. */
+  listPullRequestsOfRepo(t: string, repo: string): Promise<PullRequestRef[]> {
+    return this.queryAll<PullRequestRef>({
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+      ExpressionAttributeValues: { ':pk': keys.repoPk(t, repo), ':sk': 'PR#' },
+    });
   }
 
   /** Deployments de un SHA (GSI1 T#t#REPO#repo#SHA#sha). */

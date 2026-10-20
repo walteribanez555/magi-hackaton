@@ -195,6 +195,40 @@ export class UsageService {
       synced_at: marker!.synced_at ?? null,
     };
   }
+
+  /**
+   * Snapshots YA guardados de una key en [from, to], sin ir a MagiHub (sirve para keys que no son
+   * la del caller, p. ej. las sesiones de una tarea). null si la key nunca se sincronizó.
+   */
+  async cachedWindow(
+    tenantId: string,
+    keyId: string,
+    from: string,
+    to: string,
+  ): Promise<{ records: UsageRecord[]; granularity: UsageGranularity; provenance: Provenance; source: DataSource; ingestion_delay_minutes?: number } | null> {
+    const marker = await this.repo.getMarker(tenantId, keyId);
+    if (!marker) return null;
+    const g = marker.granularity;
+    const lower = g === 'hour' ? iso(floorTo(Date.parse(from), HOUR_MS)) : g === 'day' ? iso(floorTo(Date.parse(from), DAY_MS)) : from;
+    const items = await this.repo.listRecords(tenantId, keyId, g, lower, to);
+    const simulated = items.some((i) => i.simulated) || marker.provenance === 'simulated';
+    const { provenance, source } = simulated ? this.provenanceOf(true) : { provenance: marker.provenance, source: marker.source };
+    return {
+      records: items.map((i) => ({
+        request_id: i.request_id,
+        window_start: i.window_start,
+        window_end: i.window_end,
+        model: i.model,
+        usage: i.usage,
+        requests: i.requests,
+        cost_usd: i.cost_usd,
+      })),
+      granularity: g,
+      provenance,
+      source,
+      ...(marker.ingestion_delay_minutes !== undefined ? { ingestion_delay_minutes: marker.ingestion_delay_minutes } : {}),
+    };
+  }
 }
 
 /** Reagrega registros a hora/día (solo hacia granularidades más gruesas). */

@@ -42,8 +42,8 @@ Este artículo define las etiquetas; cada artículo de métrica indica cuál le 
 |-------------------------------------------|------------------------------------------|
 | `tokens.total` (vista de toda la key)     | `real`                                   |
 | `tokens.total` (vista filtrada, hora/día) | `estimated`                              |
-| `funnel[generated|accepted].lines`        | `real`                                   |
-| `funnel[committed|in_reference|deployed].lines` | `estimated`                        |
+| `funnel[generated].lines`, `funnel[accepted].lines`        | `real`                                   |
+| `funnel[committed / in_reference / deployed].lines` | `estimated`                        |
 | todas las `effective_lines` y aristas     | `estimated`                              |
 | `ChangeScores.provenance`                 | `estimated` (modelo entrenado con datos reales) o `simulated` (sintéticos) |
 | cualquier dato con `MAGIHUB_MODE=mock` o `demo-seed` | `simulated`                   |

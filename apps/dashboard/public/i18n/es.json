@@ -1,0 +1,58 @@
+{
+  "brand": { "hub": "MagiHub", "product": "MagiCode" },
+  "nav": {
+    "sections": "Secciones",
+    "resumen": "Resumen",
+    "tareas": "Tareas",
+    "ramas": "Ramas",
+    "sesiones": "Sesiones",
+    "cambios": "Cambios",
+    "pullRequests": "Pull requests",
+    "integraciones": "Integraciones",
+    "guia": "Guía",
+    "guiaMetricas": "Guía de métricas",
+    "scope": "Ámbito"
+  },
+  "header": {
+    "tenant": "Tenant",
+    "project": "Proyecto",
+    "period": "Periodo",
+    "task": "Tarea",
+    "branch": "Rama",
+    "apiKey": "API key",
+    "demoMode": "Modo demo · sin login",
+    "useMyKey": "Usar mi API key",
+    "logout": "Desconectar",
+    "sampleData": "Datos de ejemplo: el dashboard muestra fixtures locales, no datos de MagiHub.",
+    "skip": "Saltar al contenido"
+  },
+  "readiness": {
+    "notReady": "El proyecto no está listo:",
+    "review": "Revisar integraciones"
+  },
+  "legend": {
+    "real": "real: medido en MagiHub, Git o el IDE",
+    "estimated": "estimado: aproximación declarada",
+    "simulated": "simulado: mock o seed de demo",
+    "criticality": "Criticidad: XGBoost rework × importancia × criticidad del archivo"
+  },
+  "common": {
+    "loading": "Cargando…",
+    "retry": "Reintentar",
+    "noData": "Sin datos para este ámbito.",
+    "error": "No se pudieron cargar los datos.",
+    "noDenominator": "sin denominador",
+    "all": "Todas",
+    "allM": "Todos"
+  },
+  "connect": {
+    "title": "Conectar con MagiHub",
+    "lead": "Pega una API key de MagiHub. Se guarda solo en esta pestaña (sessionStorage) y se envía únicamente al API de MagiCode como Bearer.",
+    "label": "API key de MagiHub",
+    "submit": "Conectar",
+    "validating": "Validando…",
+    "demo": "Este entorno está en modo demo: puedes entrar sin key.",
+    "enterDemo": "Entrar sin key",
+    "mock": "Datos de ejemplo: cualquier key sirve."
+  }
+}

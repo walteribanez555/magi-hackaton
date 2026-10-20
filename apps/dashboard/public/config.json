@@ -1,4 +1,5 @@
 {
-  "apiUrl": "http://localhost:3000",
-  "environment": "local"
+  "apiUrl": "https://a5fo4490y4.execute-api.us-east-1.amazonaws.com",
+  "environment": "dev",
+  "demoMode": true
 }
