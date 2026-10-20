@@ -1,5 +1,13 @@
-import { TaskKey, type Criticality, type TaskListItem } from '@magicode/contracts';
+import { TaskKey, type Criticality, type Provenance, type TaskListItem } from '@magicode/contracts';
+import { config } from '../../config/config';
+import { createLogger } from '../../config/logger';
 import { BadRequestException, NotFoundException } from '../../common/exceptions';
+import { isCommitDeployed, type DeployEvidenceRef, type DeployPrRef } from '../../common/utils/deployment-evidence';
+import { DAY_MS, iso } from '../../common/utils/time';
+import { acceptedNonTrivial, allocateUsage, worst } from '../productivity/productivity.metrics';
+import { productivityRepository } from '../productivity/productivity.repository';
+import type { AiRequestItem, ChangeItem, UsageInput } from '../productivity/productivity.types';
+import { usageService } from '../usage/usage.service';
 import { branchesRepository, type BranchesRepository } from '../branches/branches.repository';
 import { asArray, toBranchListItem } from '../branches/branches.service';
 import { pullRequestsService, type PullRequestsService } from '../pull-requests/pull-requests.service';
@@ -17,6 +25,8 @@ import type {
   TaskSessionView,
 } from './tasks.types';
 
+const logger = createLogger('Tasks');
+
 const ACCEPTED = new Set(['accepted', 'committed', 'in_reference']);
 const CRITICALITY: Criticality[] = ['low', 'medium', 'high', 'critical'];
 /** Tope de tareas por proyecto en el listado (cada una cuesta 1 Query de links + sesiones). */
@@ -30,12 +40,16 @@ const s = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
 /** ¿La fila (petición/cambio) cuenta para la tarea? La de la tarea, o sin tarea en una sesión enlazada. */
 const belongs = (row: Item, taskKey: string) => !row.task_key || row.task_key === taskKey;
 
+/** Peticiones de la tarea en sus sesiones enlazadas (las de la tarea o sin tarea). */
+export const taskRequests = (taskKey: string, sessions: SessionRows[]): Item[] =>
+  sessions.flatMap((s) => s.requests.filter((r) => belongs(r, taskKey)));
+
 /**
- * Tokens / líneas de una tarea a partir de las sesiones enlazadas. La atribución es por ENLACE
- * (sesión ↔ tarea), no por petición medida en MagiHub ⇒ provenance `estimated` (o `simulated`
- * si cualquier petición viene del mock).
+ * Tokens / líneas de una tarea a partir de las sesiones enlazadas. `tokens` (si viene) es la
+ * imputación de la API de consumo (allocateTaskTokens); si no, Σ usage reportado ⇒ `estimated`
+ * (o `simulated` si cualquier petición viene del mock). accepted_lines = no triviales (§2.5).
  */
-export function aggregateTaskMetrics(taskKey: string, sessions: SessionRows[]): TaskMetrics {
+export function aggregateTaskMetrics(taskKey: string, sessions: SessionRows[], allocated?: TaskMetrics['tokens']): TaskMetrics {
   let tokens = 0;
   let simulated = false;
   let accepted = 0;
@@ -50,19 +64,80 @@ export function aggregateTaskMetrics(taskKey: string, sessions: SessionRows[]): 
     }
     for (const c of changes) {
       if (!belongs(c, taskKey) || !ACCEPTED.has(String(c.status))) continue;
-      accepted += n(c.accepted_added_lines);
+      accepted += acceptedNonTrivial(c as unknown as ChangeItem).lines;
       effective += n((c.dimensions as { effective_lines?: number } | undefined)?.effective_lines);
       const level = CRITICALITY.indexOf((c.scores as { criticality?: Criticality } | undefined)?.criticality as Criticality);
       if (level > crit) crit = level;
     }
   }
   return {
-    tokens: { value: sessions.length ? tokens : null, provenance: simulated ? 'simulated' : 'estimated' },
+    tokens: allocated ?? { value: sessions.length ? tokens : null, provenance: simulated ? 'simulated' : 'estimated' },
     accepted_lines: accepted,
     effective_lines: Math.round(effective * 100) / 100,
     criticality: crit >= 0 ? CRITICALITY[crit]! : null,
   };
 }
+
+/** Fuente de consumo para imputar tokens a una tarea (inyectable en tests). */
+export interface TaskUsageSource {
+  /** snapshots guardados de la key (sin ir a MagiHub); null si nunca se sincronizó */
+  cachedWindow(t: string, keyId: string, from: string, to: string): Promise<UsageInput | null>;
+  /** todas las peticiones de la key en [from, to] (denominador del prorrateo hora/día) */
+  requestsOfKey(t: string, keyId: string, from: string, to: string): Promise<AiRequestItem[]>;
+  mode(): 'real' | 'mock';
+}
+
+export const defaultTaskUsageSource: TaskUsageSource = {
+  cachedWindow: (t, k, from, to) => usageService.cachedWindow(t, k, from, to),
+  requestsOfKey: (t, k, from, to) => productivityRepository.listRequestsOfKey(t, k, from, to),
+  mode: () => config.getValue('magihub').mode,
+};
+
+/**
+ * TaskListItem.tokens con el MISMO método que el summary?task_key (productivity.metrics →
+ * allocateUsage): por cada key de las peticiones de la tarea, snapshots de la API de consumo en la
+ * ventana [día de la 1ª petición, fin del día de la última] imputados por request_id o prorrateados
+ * por ventana hora/día; sin snapshots ⇒ Σ usage reportado (estimated). Se suma por key.
+ */
+export async function allocateTaskTokens(
+  t: string,
+  requests: Item[],
+  hasSessions: boolean,
+  source: TaskUsageSource,
+): Promise<TaskMetrics['tokens']> {
+  if (!hasSessions) return { value: null, provenance: 'estimated' };
+  const byKey = new Map<string, AiRequestItem[]>();
+  for (const r of requests) {
+    const k = typeof r.key_id === 'string' ? r.key_id : '';
+    byKey.set(k, [...(byKey.get(k) ?? []), r as unknown as AiRequestItem]);
+  }
+  const mode = source.mode();
+  let value = 0;
+  const provs: Provenance[] = [];
+  for (const [keyId, reqs] of byKey) {
+    const times = reqs.map((r) => Date.parse(String(r.occurred_at ?? ''))).filter(Number.isFinite);
+    let usage: UsageInput | null = null;
+    let keyRequests: AiRequestItem[] | undefined;
+    if (keyId && times.length) {
+      const from = iso(Math.floor(Math.min(...times) / DAY_MS) * DAY_MS);
+      const to = iso(Math.floor(Math.max(...times) / DAY_MS) * DAY_MS + DAY_MS - 1);
+      try {
+        usage = await source.cachedWindow(t, keyId, from, to);
+        if (usage && usage.granularity !== 'request') keyRequests = await source.requestsOfKey(t, keyId, from, to);
+      } catch (err) {
+        logger.warn('Snapshots de usage no disponibles para la tarea; se usa Σ reportado', { error: err instanceof Error ? err.message : String(err) });
+        usage = null;
+      }
+    }
+    const { total } = allocateUsage({ usage, magihubMode: mode, requests: reqs, keyRequests, scoped: true });
+    value += total.value ?? 0;
+    provs.push(total.provenance);
+  }
+  return { value, provenance: provs.length ? worst(...provs) : mode === 'mock' ? 'simulated' : 'estimated' };
+}
+
+/** Datos por repo para la regla de despliegue (cacheados durante un listado). */
+type RepoEvidence = { deployments: DeployEvidenceRef[]; prs: DeployPrRef[] };
 
 const sessionIdsOf = (links: TaskLinkItem[]): string[] =>
   [...new Set(links.filter((l) => l.kind === 'session').map((l) => l.session_id ?? l.link_id))].filter(Boolean);
@@ -73,6 +148,7 @@ export function buildTaskListItem(
   task: TaskItem | null,
   links: TaskLinkItem[],
   metrics: TaskMetrics,
+  deployed = false,
 ): TaskListItem {
   const byKind = (k: TaskLinkItem['kind']) => links.filter((l) => l.kind === k);
   const prs = byKind('pr');
@@ -95,7 +171,7 @@ export function buildTaskListItem(
     tokens: metrics.tokens,
     accepted_lines: metrics.accepted_lines,
     effective_lines: metrics.effective_lines,
-    deployed: byKind('deployment').some((l) => l.deployed === true || l.state === 'success'),
+    deployed,
     updated_at: task?.source_updated_at ?? task?.updated_at ?? lastLink ?? '',
   };
 }
@@ -106,7 +182,32 @@ export class TasksService {
     private readonly branches: BranchesRepository = branchesRepository,
     private readonly prRepo: PullRequestsRepository = pullRequestsRepository,
     private readonly prService: PullRequestsService = pullRequestsService,
+    private readonly usageSource: TaskUsageSource = defaultTaskUsageSource,
   ) {}
+
+  /**
+   * TaskListItem.deployed — misma regla que la etapa `deployed` del embudo: algún commit enlazado
+   * (TaskLink kind=commit: repo, sha, rama) tiene Deployment success de su SHA o del merge/head de
+   * un PR cuya rama origen lo contiene.
+   */
+  async deployedFor(tenantId: string, links: TaskLinkItem[], cache: Map<string, Promise<RepoEvidence>> = new Map()): Promise<boolean> {
+    const commits = links
+      .filter((l) => l.kind === 'commit' && l.repository)
+      .map((l) => ({ repository: l.repository!, sha: l.sha ?? l.link_id, branch: l.branch ?? null }));
+    for (const repo of new Set(commits.map((c) => c.repository))) {
+      let p = cache.get(repo);
+      if (!p) {
+        p = Promise.all([this.repo.deploymentsOf(tenantId, repo), this.prRepo.byRepository(tenantId, repo)]).then(([deps, prs]) => ({
+          deployments: deps.map((d) => ({ repository: String(d.repository ?? repo), sha: String(d.sha ?? ''), state: s(d.state) ?? undefined })),
+          prs: prs as DeployPrRef[],
+        }));
+        cache.set(repo, p);
+      }
+      const ev = await p;
+      if (commits.some((c) => c.repository === repo && isCommitDeployed(c, ev.deployments, ev.prs))) return true;
+    }
+    return false;
+  }
 
   /** Métricas + enlaces de una tarea (lo usan el listado, el detalle y las reglas de write-back). */
   async metricsFor(
@@ -122,13 +223,15 @@ export class TasksService {
         return p;
       }),
     );
-    return { links, metrics: aggregateTaskMetrics(taskKey, rows) };
+    const tokens = await allocateTaskTokens(tenantId, taskRequests(taskKey, rows), rows.length > 0, this.usageSource);
+    return { links, metrics: aggregateTaskMetrics(taskKey, rows, tokens) };
   }
 
   /** GET /tasks?project_id&status_category */
   async list(tenantId: string, q: TaskQuery): Promise<TaskListItem[]> {
     const projects = q.project_id ? [q.project_id] : await this.branches.projectIds(tenantId);
     const cache = new Map<string, Promise<SessionRows>>();
+    const evidence = new Map<string, Promise<RepoEvidence>>();
     const perProject = await Promise.all(
       projects.map(async (project) => {
         const [tasks, branchItems] = await Promise.all([
@@ -148,7 +251,7 @@ export class TasksService {
         return Promise.all(
           entries.map(async ({ key, task }) => {
             const { links, metrics } = await this.metricsFor(tenantId, key, cache);
-            return buildTaskListItem(key, project, task, links, metrics);
+            return buildTaskListItem(key, project, task, links, metrics, await this.deployedFor(tenantId, links, evidence));
           }),
         );
       }),
@@ -168,7 +271,7 @@ export class TasksService {
     if ((!task || task.deleted === true) && !links.length) throw new NotFoundException('Tarea no encontrada', 'TASK_NOT_FOUND');
     const live = task && task.deleted !== true ? task : null;
     const projectId = live?.project_id ?? links.find((l) => l.project_id)?.project_id ?? '';
-    const item = buildTaskListItem(taskKey, projectId, live, links, metrics);
+    const item = buildTaskListItem(taskKey, projectId, live, links, metrics, await this.deployedFor(tenantId, links));
 
     const of = (k: TaskLinkItem['kind']) => links.filter((l) => l.kind === k);
     const commitRefs = of('commit')
@@ -201,7 +304,8 @@ export class TasksService {
     const commitViews: TaskCommitView[] = commits
       .map((c) => {
         const a = (c.automation ?? {}) as { ai_matched_lines?: number; commit_added_lines?: number; ai_share?: number };
-        const remoteOnly = c.remote_only === true;
+        // remote_only y el IDE no lo reportó después (ide_reported_at) ⇒ sin cruce de hashes
+        const remoteOnly = c.remote_only === true && !c.ide_reported_at;
         return {
           sha: String(c.sha),
           repository: String(c.repository),

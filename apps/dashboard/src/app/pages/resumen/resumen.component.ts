@@ -17,7 +17,6 @@ import {
   LineChartComponent,
   LoadingComponent,
   MetricComponent,
-  ProvenanceComponent,
   SectionComponent,
   StateComponent,
   type ChartSeries,
@@ -33,6 +32,7 @@ import {
   TASK_CATEGORY_LABEL,
 } from '@/shared/labels/labels';
 import { formatDay, formatDateTime, formatNumber, formatPercent } from '@/shared/utils/format';
+import { valueOf } from '@/shared/utils/resource';
 
 const silent = () => new HttpContext().set(SILENT_ERRORS, true);
 
@@ -53,7 +53,6 @@ const CRIT_RANK: Record<Criticality, number> = { low: 0, medium: 1, high: 2, cri
     RouterLink,
     ...FORMAT_PIPES,
     MetricComponent,
-    ProvenanceComponent,
     HelpLinkComponent,
     SectionComponent,
     LoadingComponent,
@@ -72,7 +71,7 @@ export class ResumenComponent {
 
   protected readonly summary = rxResource({
     params: () => this.scope.query(),
-    stream: ({ params }) => this.productivity.summary(params),
+    stream: ({ params }) => this.productivity.summary(params!),
   });
 
   protected readonly timeline = rxResource({
@@ -106,11 +105,11 @@ export class ResumenComponent {
   // ── Selectores de tarea y rama ─────────────────────────────────────
   protected readonly taskOptions = computed<ScopeOption[]>(() => [
     { id: '', label: 'Todas' },
-    ...(this.tasks.value() ?? []).map((t) => ({ id: t.task_key, label: `${t.task_key} · ${t.title}` })),
+    ...(valueOf(this.tasks) ?? []).map((t) => ({ id: t.task_key, label: `${t.task_key} · ${t.title}` })),
   ]);
   protected readonly branchOptions = computed<ScopeOption[]>(() => [
     { id: '', label: 'Todas' },
-    ...(this.branches.value() ?? []).map((b) => ({ id: b.branch, label: b.branch, hint: b.repository })),
+    ...(valueOf(this.branches) ?? []).map((b) => ({ id: b.branch, label: b.branch, hint: b.repository })),
   ]);
   protected selectTask(id: string): void {
     this.scope.taskKey.set(id || null);
@@ -121,7 +120,7 @@ export class ResumenComponent {
 
   // ── Derivados del resumen ──────────────────────────────────────────
   protected readonly funnel = computed(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     if (!s) return [];
     const byStage = new Map(s.funnel.map((f) => [f.stage, f]));
     const steps = STAGE_ORDER.map((st) => byStage.get(st)).filter((f): f is FunnelStep => !!f);
@@ -141,7 +140,7 @@ export class ResumenComponent {
   }
 
   protected readonly lead = computed(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     if (!s) return null;
     const ref = this.stage(s, 'in_reference');
     const dep = this.stage(s, 'deployed');
@@ -159,7 +158,7 @@ export class ResumenComponent {
   });
 
   protected readonly attributionText = computed(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     if (!s) return '';
     const attr =
       s.attribution === 'exact'
@@ -180,7 +179,7 @@ export class ResumenComponent {
    * para que la suma nunca supere el total.
    */
   protected readonly tokenSegments = computed<TokenSegment[]>(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     if (!s) return [];
     const t = s.tokens;
     const total = Math.max(0, t.total.value ?? 0);
@@ -211,7 +210,7 @@ export class ResumenComponent {
   });
 
   protected readonly tokenAria = computed(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     if (!s) return '';
     return (
       `Distribución de ${formatNumber(s.tokens.total.value)} tokens: ` +
@@ -222,7 +221,7 @@ export class ResumenComponent {
   });
 
   protected readonly kinds = computed(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     if (!s) return [];
     const entries = Object.entries(s.dimensions.importance.by_kind ?? {}).sort((a, b) => b[1] - a[1]);
     const max = Math.max(1, ...entries.map(([, n]) => n));
@@ -230,12 +229,12 @@ export class ResumenComponent {
   });
 
   protected readonly acceptedLines = computed(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     return s ? (this.stage(s, 'accepted')?.lines.value ?? 0) : 0;
   });
 
   protected readonly nonTrivial = computed(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     if (!s) return 0;
     const byKind = s.dimensions.importance.by_kind ?? {};
     const total = Object.values(byKind).reduce((a, b) => a + b, 0);
@@ -243,14 +242,14 @@ export class ResumenComponent {
   });
 
   protected readonly redundantLines = computed(() => {
-    const r = this.summary.value()?.dimensions.redundancy;
+    const r = valueOf(this.summary)?.dimensions.redundancy;
     return r ? r.intra_change + r.existing_in_repo + r.repeated_in_session : 0;
   });
 
   // ── Por tarea ──────────────────────────────────────────────────────
   protected readonly taskRows = computed(() => {
-    const tasks = this.tasks.value() ?? [];
-    const changes = this.changes.value() ?? [];
+    const tasks = valueOf(this.tasks) ?? [];
+    const changes = valueOf(this.changes) ?? [];
     const worst = new Map<string, { level: Criticality; score: number }>();
     for (const c of changes) {
       if (!c.task_key || !c.scores) continue;
@@ -275,7 +274,7 @@ export class ResumenComponent {
       deploy: t.deployed ? 'desplegada' : '—',
     }));
     // Tokens sin tarea: total del ámbito − Σ tareas (si es positivo).
-    const total = this.summary.value()?.tokens.total.value ?? null;
+    const total = valueOf(this.summary)?.tokens.total.value ?? null;
     const sum = tasks.reduce((a, t) => a + (t.tokens.value ?? 0), 0);
     if (total !== null && total - sum > 0.5 && tasks.length) {
       rows.push({
@@ -296,7 +295,7 @@ export class ResumenComponent {
   });
 
   protected readonly taskHint = computed(() => {
-    const s = this.summary.value();
+    const s = valueOf(this.summary);
     if (!s) return '';
     return `${formatNumber(s.counts.tasks)} tareas · ${formatNumber(s.counts.pull_requests)} pull requests (${formatNumber(s.counts.pull_requests_merged)} fusionados)`;
   });
@@ -308,7 +307,7 @@ export class ResumenComponent {
 
   // ── Línea de tiempo ────────────────────────────────────────────────
   protected readonly chart = computed(() => {
-    const pts = this.timeline.value() ?? [];
+    const pts = valueOf(this.timeline) ?? [];
     const hourly = this.scope.range().days <= 2;
     const labels = pts.map((p) => (hourly ? formatDateTime(p.bucket_start).split(' ').pop()! : formatDay(p.bucket_start)));
     const tokens: ChartSeries[] = [{ id: 'tokens', label: 'Tokens', color: 'var(--ink)', values: pts.map((p) => p.tokens) }];

@@ -1,6 +1,6 @@
-import type { Provenance } from '@magicode/contracts';
+import type { PullRequestState } from '@magicode/contracts';
 
-export type PullRequestState = 'open' | 'closed' | 'merged';
+export type { PullRequestState };
 
 export interface PullRequestQuery {
   project_id?: string;
@@ -38,37 +38,5 @@ export interface CommitLite {
   automation?: { ai_matched_lines?: number; commit_added_lines?: number };
 }
 
-/** Vista de GET /pull-requests (propuesta para contracts: PullRequestListItem). */
-export interface PullRequestListItem {
-  repository: string;
-  number: number;
-  state: PullRequestState;
-  source_branch: string;
-  target_branch: string;
-  task_keys: string[];
-  head_sha: string;
-  merge_sha: string | null;
-  url: string;
-  opened_at: string | null;
-  merged_at: string | null;
-  closed_at: string | null;
-  updated_at: string;
-  ai: {
-    /** commits del PR conocidos (rama origen + head + merge) */
-    commits: number;
-    commits_with_ai: number;
-    ai_matched_lines: number;
-    commit_added_lines: number;
-    contains_ai_lines: boolean;
-    /** cruce por rama/SHA, no por ancestros reales del merge ⇒ estimated */
-    provenance: Provenance;
-  };
-}
-
-export interface PullRequestTotals {
-  total: number;
-  open: number;
-  merged: number;
-  closed: number;
-  with_ai_lines: number;
-}
+/** Vista de GET /pull-requests y totales de `meta`: schemas en contracts (integrations.ts). */
+export type { PullRequestListItem, PullRequestTotals } from '@magicode/contracts';

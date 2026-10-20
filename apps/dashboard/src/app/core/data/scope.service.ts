@@ -1,10 +1,11 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
-import { of } from 'rxjs';
+import { catchError, of } from 'rxjs';
 
 import { formatRange } from '@/shared/utils/format';
 import { IntegrationsService } from './integrations.service';
 import { ProductivityService, type ScopeQuery } from './productivity.service';
+import { valueOf } from '@/shared/utils/resource';
 
 export type PeriodId = '1d' | '7d' | '14d' | '30d' | '90d';
 
@@ -53,13 +54,13 @@ export class ScopeService {
 
   /** Proyecto efectivo: el elegido si existe, si no el de actividad más reciente. */
   readonly projectId = computed<string | null>(() => {
-    const list = this.projects.value() ?? [];
+    const list = valueOf(this.projects) ?? [];
     const chosen = this.chosenProject();
     if (chosen && list.some((p) => p.project_id === chosen)) return chosen;
     return list[0]?.project_id ?? null;
   });
 
-  readonly project = computed(() => (this.projects.value() ?? []).find((p) => p.project_id === this.projectId()) ?? null);
+  readonly project = computed(() => (valueOf(this.projects) ?? []).find((p) => p.project_id === this.projectId()) ?? null);
 
   readonly range = computed(() => {
     const days = PERIODS.find((p) => p.id === this.period())?.days ?? 7;
@@ -73,10 +74,10 @@ export class ScopeService {
 
   readonly periodLabel = computed(() => formatRange(this.range().from, this.range().to));
 
-  /** Parámetros para /productivity/* (null hasta conocer el proyecto). */
-  readonly query = computed<ScopeQuery | null>(() => {
+  /** Parámetros para /productivity/* (undefined hasta conocer el proyecto ⇒ rxResource no carga). */
+  readonly query = computed<ScopeQuery | undefined>(() => {
     const project_id = this.projectId();
-    if (!project_id) return null;
+    if (!project_id) return undefined;
     const { from, to } = this.range();
     return {
       project_id,
@@ -89,8 +90,8 @@ export class ScopeService {
 
   /** Readiness del proyecto para el aviso global (webhooks obligatorios). */
   readonly readiness = rxResource({
-    params: () => this.projectId(),
-    stream: ({ params }) => (params ? this.integrations.projectReadiness(params) : of(null)),
+    params: () => this.projectId() ?? undefined,
+    stream: ({ params }) => this.integrations.projectReadiness(params).pipe(catchError(() => of(null))),
   });
 
   selectProject(id: string): void {

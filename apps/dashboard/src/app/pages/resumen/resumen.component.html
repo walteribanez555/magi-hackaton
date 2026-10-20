@@ -1,0 +1,267 @@
+<nav aria-label="Filtros del resumen" class="-mt-2 mb-6 flex flex-wrap gap-x-[22px] gap-y-1 text-sm">
+  <app-scope-menu
+    label="Tarea"
+    [value]="scope.taskKey() ?? ''"
+    [valueLabel]="scope.taskKey()"
+    [options]="taskOptions()"
+    [mono]="!!scope.taskKey()"
+    (select)="selectTask($event)"
+  />
+  <app-scope-menu
+    label="Rama"
+    [value]="scope.branch() ?? ''"
+    [valueLabel]="scope.branch()"
+    [options]="branchOptions()"
+    [mono]="!!scope.branch()"
+    (select)="selectBranch($event)"
+  />
+</nav>
+
+@if (summary.isLoading() && !summary.hasValue()) {
+  <app-loading [rows]="6" label="Cargando el resumen…" />
+} @else if (summary.error()) {
+  <app-state kind="error" message="No se pudo cargar el resumen." (retry)="summary.reload()" />
+} @else if (!scope.projectId() && !scope.projects.isLoading()) {
+  <app-state message="Todavía no hay proyectos con actividad para esta API key." detail="Instala la extensión MagiCode en VS Code y abre una sesión para empezar a medir." />
+} @else if (summary.value(); as s) {
+  <p class="m-0 mb-1.5 text-[13px] text-muted">
+    Resumen · {{ s.scope.project_id ?? scope.projectId() }}@if (scope.project()?.repositories?.length) { · {{ scope.project()!.repositories.join(', ') }}}
+  </p>
+  @if (lead(); as l) {
+    <h1 class="m-0 max-w-[940px] text-[28px] leading-[1.22] font-semibold tracking-[-0.02em] sm:text-[34px]">
+      <app-metric [m]="l.tokens" /> tokens de MagiHub produjeron
+      <app-metric [m]="l.lines" /> líneas que {{ l.targetLabel }}.
+    </h1>
+    <p class="m-0 mt-3.5 max-w-[860px] text-[17px] text-ink-2">
+      Son
+      <strong class="font-semibold text-ink"><app-metric [m]="l.per100" help="tokens_per_100_effective_lines" /> tokens por cada 100 líneas efectivas</strong>
+      {{ l.per100Label }}.
+      @if (l.deployedLines > 0) {
+        <app-metric [m]="l.deployed!.lines" /> líneas tienen evidencia de despliegue en producción.
+      } @else {
+        Ninguna línea tiene todavía evidencia de despliegue en producción.
+      }
+    </p>
+  }
+  <p class="m-0 mt-2.5 text-[13px] text-muted">{{ attributionText() }}</p>
+  @if (s.warnings?.length) {
+    <ul class="m-0 mt-3 list-none border-y border-rule p-0 py-2 text-[13px]" aria-label="Avisos">
+      @for (w of s.warnings; track w.code) {
+        <li class="py-0.5 text-estimated"><span aria-hidden="true" class="mr-2 inline-block size-2 bg-estimated align-[1px]"></span>{{ w.message }}</li>
+      }
+    </ul>
+  }
+
+  <!-- Embudo -->
+  <app-section title="Del token al código que sobrevive" headingId="h-funnel">
+    <span hint>Líneas agregadas no vacías · efectivas = ponderadas por importancia, sin redundantes ni mecánicas</span>
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[760px] border-collapse tabular-nums">
+        <thead>
+          <tr class="text-right text-xs text-muted">
+            <th scope="col" class="w-[22%] pt-3 pr-3 pb-2 text-left font-medium">Etapa</th>
+            <th scope="col" class="w-[28%] px-3 pt-3 pb-2 text-left font-medium"><span class="sr-only">Proporción</span></th>
+            <th scope="col" class="px-3 pt-3 pb-2 font-medium">Líneas<app-help key="funnel.lines" /></th>
+            <th scope="col" class="px-3 pt-3 pb-2 font-medium">Efectivas<app-help key="effective_lines" /></th>
+            <th scope="col" class="px-3 pt-3 pb-2 font-medium">Conversión<app-help key="funnel.conversion" /></th>
+            <th scope="col" class="px-3 pt-3 pb-2 font-medium">Tokens / 100 líneas<app-help key="tokens_per_100_lines" /></th>
+            <th scope="col" class="pt-3 pb-2 pl-3 font-medium">Tokens / 100 efectivas<app-help key="tokens_per_100_effective_lines" /></th>
+          </tr>
+        </thead>
+        <tbody class="text-right font-mono text-sm">
+          @for (r of funnel(); track r.step.stage) {
+            <tr class="border-t border-rule">
+              <th scope="row" class="py-3.5 pr-3 text-left font-sans text-[15px] font-medium">
+                {{ r.label }}
+                <div class="text-xs font-normal text-muted">{{ r.evidence }}</div>
+              </th>
+              <td class="px-3 py-3.5" aria-hidden="true">
+                <div class="h-2 bg-track"><div class="h-2 bg-ink" [style.width.%]="r.bar"></div></div>
+                <div class="mt-[3px] h-1 bg-accent" [style.width.%]="r.effBar"></div>
+              </td>
+              <td class="px-3 py-3.5"><app-metric [m]="r.step.lines" /></td>
+              <td class="px-3 py-3.5"><app-metric [m]="r.step.effective_lines" format="dec1" /></td>
+              <td class="px-3 py-3.5 text-ink-2"><app-metric [m]="r.step.conversion" format="pct" [hideProvenance]="true" /></td>
+              <td class="px-3 py-3.5"><app-metric [m]="r.step.tokens_per_100_lines" [hideProvenance]="true" /></td>
+              <td class="py-3.5 pl-3 font-medium"><app-metric [m]="r.step.tokens_per_100_effective_lines" [hideProvenance]="true" /></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </app-section>
+
+  <!-- Tokens -->
+  <app-section title="En qué se fueron los tokens" headingId="h-tokens">
+    <span hint>Fuente de verdad: API de consumo de MagiHub para {{ s.scope.key_id }}</span>
+    <div role="img" [attr.aria-label]="tokenAria()" class="mt-[22px] flex h-3.5 gap-0.5">
+      @for (seg of tokenSegments(); track seg.id) {
+        @if (seg.value > 0) {
+          <div
+            [style.flex]="seg.value + ' 1 0'"
+            [style.background]="seg.hatched ? 'repeating-linear-gradient(45deg, var(--seg-unreconciled) 0 2px, var(--bg) 2px 5px)' : seg.color"
+          ></div>
+        }
+      }
+    </div>
+    <div class="mt-[18px] grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-x-8 gap-y-5">
+      @for (seg of tokenSegments(); track seg.id) {
+        <div>
+          <div class="font-mono text-xl">{{ seg.value | num }}</div>
+          <div class="text-[13px] text-ink-2">
+            <span
+              aria-hidden="true"
+              class="mr-1.5 inline-block size-2.5 align-[-1px]"
+              [style.background]="seg.hatched ? 'transparent' : seg.color"
+              [style.border]="seg.hatched ? '1px solid var(--faint)' : null"
+            ></span
+            >{{ seg.label }}
+          </div>
+        </div>
+      }
+    </div>
+    <p class="m-0 mt-[18px] max-w-[820px] text-[13px] text-muted">
+      Uso según la API de MagiHub: <app-metric [m]="s.tokens.total" help="tokens.total" />. Suma del
+      <span class="font-mono">usage</span> devuelto en las {{ s.counts.ai_requests | num }} respuestas:
+      <app-metric [m]="s.tokens.reported_by_requests" help="tokens.reported_by_requests" />.
+      @if ((s.tokens.unreconciled.value ?? 0) !== 0) {
+        La diferencia puede ser otro proceso usando la misma key o retraso de ingesta.
+      }
+      @if (s.tokens.cost_usd.value !== null) {
+        Costo informado por MagiHub: US$ <app-metric [m]="s.tokens.cost_usd" format="score" />.
+      }
+    </p>
+  </app-section>
+
+  <!-- Dimensiones -->
+  <app-section title="Calidad de lo aceptado" headingId="h-dims">
+    <span hint>{{ acceptedLines() | num }} líneas aceptadas en {{ s.counts.changes_accepted | num }} cambios</span>
+    <div class="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))]">
+      <div class="pt-6 pr-7 pb-2">
+        <h3 class="m-0 text-sm font-semibold">Importancia<app-help key="dimensions.importance.score" /></h3>
+        <div class="mt-2 font-mono text-[40px] leading-[1.1]"><app-metric [m]="s.dimensions.importance.score" format="score" /></div>
+        <p class="m-0 mt-1.5 mb-4 text-[13px] text-muted">Peso medio por línea: lógica 1,0 · test 0,7 · import 0,1</p>
+        @for (k of kinds(); track k.name) {
+          <div class="grid grid-cols-[96px_1fr_44px] items-center gap-2.5 py-[3px] text-[13px]">
+            <span class="text-ink-2">{{ k.name }}</span>
+            <div class="h-1.5 bg-track" aria-hidden="true"><div class="h-1.5 bg-ink" [style.width.%]="k.bar"></div></div>
+            <span class="text-right font-mono">{{ k.n | num }}</span>
+          </div>
+        }
+      </div>
+      <div class="border-rule pt-6 pb-2 sm:border-l sm:px-7">
+        <h3 class="m-0 text-sm font-semibold">Redundancia<app-help key="dimensions.redundancy.score" /></h3>
+        <div class="mt-2 font-mono text-[40px] leading-[1.1]"><app-metric [m]="s.dimensions.redundancy.score" format="score" /></div>
+        <p class="m-0 mt-1.5 mb-4 text-[13px] text-muted">
+          {{ redundantLines() | num }} de {{ nonTrivial() | num }} líneas no triviales no aportaban nada nuevo
+        </p>
+        <dl class="m-0 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-[13px]">
+          <dt class="text-ink-2">Ya existían en el repositorio</dt>
+          <dd class="m-0 font-mono">{{ s.dimensions.redundancy.existing_in_repo | num }}</dd>
+          <dt class="text-ink-2">Repetidas en la sesión</dt>
+          <dd class="m-0 font-mono">{{ s.dimensions.redundancy.repeated_in_session | num }}</dd>
+          <dt class="text-ink-2">Duplicadas dentro del cambio</dt>
+          <dd class="m-0 font-mono">{{ s.dimensions.redundancy.intra_change | num }}</dd>
+          <dt class="text-ink-2">Regeneraciones con salida idéntica</dt>
+          <dd class="m-0 font-mono">{{ s.dimensions.redundancy.redundant_regenerations | num }} pet.</dd>
+        </dl>
+      </div>
+      <div class="border-rule pt-6 pb-2 sm:border-l sm:pl-7">
+        <h3 class="m-0 text-sm font-semibold">Automatización<app-help key="dimensions.automation.ai_share_of_commits" /></h3>
+        <div class="mt-2 font-mono text-[40px] leading-[1.1]"><app-metric [m]="s.dimensions.automation.ai_share_of_commits" format="pct" /></div>
+        <p class="m-0 mt-1.5 mb-4 text-[13px] text-muted">de las líneas de los commits vino de la IA</p>
+        <dl class="m-0 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-[13px]">
+          <dt class="text-ink-2">Mecánicas, automatizables sin LLM</dt>
+          <dd class="m-0 font-mono"><app-metric [m]="s.dimensions.automation.mechanical_share" format="pct" /></dd>
+          <dt class="text-ink-2">Perdidas antes del commit</dt>
+          <dd class="m-0 font-mono"><app-metric [m]="s.dimensions.automation.lost_before_commit" format="pct" /></dd>
+          <dt class="text-ink-2">Aceptadas tal cual</dt>
+          <dd class="m-0 font-mono">{{ s.dimensions.automation.accepted_as_is | num }}</dd>
+          <dt class="text-ink-2">Editadas antes de aceptar</dt>
+          <dd class="m-0 font-mono">{{ s.dimensions.automation.edited_before_accept | num }}</dd>
+        </dl>
+      </div>
+    </div>
+  </app-section>
+
+  <!-- Por tarea -->
+  <app-section title="Por tarea" headingId="h-tasks">
+    <span hint>{{ taskHint() }}</span>
+    @if (tasks.isLoading() && !tasks.hasValue()) {
+      <app-loading [rows]="3" />
+    } @else if (!taskRows().length) {
+      <app-state message="Sin tareas enlazadas en este proyecto." detail="Conecta Jira en Integraciones y nombra las ramas con la clave de la tarea (feature/MAG-123-…)." />
+    } @else {
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[980px] border-collapse text-sm">
+          <thead>
+            <tr class="text-xs text-muted">
+              <th scope="col" class="pt-3 pr-3 pb-2 text-left font-medium">Tarea</th>
+              <th scope="col" class="px-3 pt-3 pb-2 text-left font-medium">Estado</th>
+              <th scope="col" class="px-3 pt-3 pb-2 text-left font-medium">Rama</th>
+              <th scope="col" class="px-3 pt-3 pb-2 text-left font-medium">PR</th>
+              <th scope="col" class="px-3 pt-3 pb-2 text-right font-medium">Tokens</th>
+              <th scope="col" class="px-3 pt-3 pb-2 text-right font-medium">Efectivas</th>
+              <th scope="col" class="px-3 pt-3 pb-2 text-left font-medium">Criticidad<app-help key="criticality" /></th>
+              <th scope="col" class="pt-3 pb-2 pl-3 text-left font-medium">Despliegue</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (t of taskRows(); track t.key) {
+              <tr class="border-t border-rule align-top">
+                <td class="py-3.5 pr-3">
+                  @if (t.link) {
+                    <a [routerLink]="['/tareas', t.key]" class="font-mono text-[13px] no-underline">{{ t.key }}</a>
+                  } @else {
+                    <span class="font-mono text-[13px] text-muted">{{ t.key }}</span>
+                  }
+                  <div class="text-ink">{{ t.title }}</div>
+                </td>
+                <td class="px-3 py-3.5 whitespace-nowrap text-ink-2">{{ t.status }}</td>
+                <td class="px-3 py-3.5 font-mono text-[13px] text-ink-2">
+                  {{ t.branch }}@if (t.moreBranches) {<span class="text-muted"> +{{ t.moreBranches }}</span>}
+                </td>
+                <td class="px-3 py-3.5 whitespace-nowrap text-ink-2">{{ t.pr }}</td>
+                <td class="px-3 py-3.5 text-right font-mono"><app-metric [value]="t.tokens.value" [provenance]="t.tokens.provenance" /></td>
+                <td class="px-3 py-3.5 text-right font-mono">{{ t.eff | num: 1 }}</td>
+                <td class="px-3 py-3.5 whitespace-nowrap">
+                  <app-crit [level]="t.crit?.level" [score]="t.crit?.score" />
+                </td>
+                <td class="py-3.5 pl-3 text-ink-2">{{ t.deploy }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </app-section>
+
+  <!-- Línea de tiempo -->
+  <app-section title="En el tiempo" headingId="h-timeline">
+    <span hint>{{ scope.periodLabel() }}</span>
+    @if (timeline.isLoading() && !timeline.hasValue()) {
+      <app-loading [rows]="2" />
+    } @else if (chart().empty) {
+      <app-state message="Sin actividad en el periodo." />
+    } @else {
+      <div class="mt-6 grid gap-x-10 gap-y-8 lg:grid-cols-2">
+        <div class="min-w-0">
+          <h3 class="m-0 mb-2 text-sm font-semibold">Tokens<app-help key="tokens.total" /></h3>
+          <app-line-chart [series]="chart().tokens" [labels]="chart().labels" [ariaLabel]="chart().tokensAria" />
+        </div>
+        <div class="min-w-0">
+          <h3 class="m-0 mb-2 text-sm font-semibold">Líneas</h3>
+          <app-line-chart [series]="chart().lines" [labels]="chart().labels" [ariaLabel]="chart().linesAria" [decimals]="1" />
+        </div>
+      </div>
+    }
+  </app-section>
+
+  <footer class="mt-12 flex flex-wrap gap-x-7 gap-y-2 border-t border-rule pt-4 text-xs text-muted">
+    <span><sup class="text-[10px]">R</sup> real: medido en MagiHub, Git o el IDE</span>
+    <span><sup class="text-[10px] text-estimated">E</sup> estimado: aproximación declarada</span>
+    <span><sup class="text-[10px]">S</sup> simulado: mock o seed de demo</span>
+    <span>Criticidad: XGBoost <span class="font-mono">rework</span> × importancia × criticidad del archivo</span>
+    <span>— sin denominador: la cifra no es calculable (división por 0)</span>
+  </footer>
+}

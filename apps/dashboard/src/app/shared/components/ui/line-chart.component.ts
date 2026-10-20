@@ -81,7 +81,7 @@ function niceMax(v: number): number {
           @if (active() !== null) {
             <line [attr.x1]="xAt(active()!)" [attr.x2]="xAt(active()!)" [attr.y1]="pad.top" [attr.y2]="height - pad.bottom" stroke="var(--faint)" stroke-width="1" />
             @for (s of series(); track s.id) {
-              <circle [attr.cx]="xAt(active()!)" [attr.cy]="yAt(s.values[active()!] ?? 0)" r="4" [attr.fill]="s.color" stroke="var(--bg)" stroke-width="2" />
+              <circle [attr.cx]="xAt(active()!)" [attr.cy]="yAt(s.values[active()!])" r="4" [attr.fill]="s.color" stroke="var(--bg)" stroke-width="2" />
             }
           }
         </svg>

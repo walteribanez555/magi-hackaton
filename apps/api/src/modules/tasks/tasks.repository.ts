@@ -32,6 +32,11 @@ export class TasksRepository {
     return this.store.batchGet(ids.map((id) => keys.session(t, id)));
   }
 
+  /** Deployments del repo (regla de despliegue: SHA del commit o merge/head de su PR). */
+  deploymentsOf(t: string, repository: string): Promise<Item[]> {
+    return this.store.queryPrefix(keys.repoPk(t, repository), 'DEPLOY#', { limit: 2000 });
+  }
+
   commits(t: string, refs: Array<{ repository: string; sha: string }>): Promise<Item[]> {
     return this.store.batchGet(refs.map((r) => keys.commit(t, r.repository, r.sha)));
   }

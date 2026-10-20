@@ -19,9 +19,21 @@ import { HttpException, NotFoundException, UnauthorizedException } from '../../c
 import { usageService, type UsageService } from '../usage/usage.service';
 import { usageRepository } from '../usage/usage.repository';
 import { summaryWarnings } from '../integration-health/summary-warnings';
+import { integrationsRepository, type IntegrationsRepository } from '../integrations/integrations.repository';
+import {
+  onChangeAccepted as buildScoresUpdate,
+  scoringInputFromAcceptedEvent,
+  scoringService,
+  type ScoringContext,
+  type ScoringService,
+} from '../scoring';
+import { taskSyncService } from '../task-sync/task-sync.service';
+import type { FireTrigger } from '../task-sync/task-sync.types';
 import {
   changeRef,
   commitRef,
+  eventBranch,
+  eventTaskKeys,
   projectEvent,
   type PreState,
   type Projection,
@@ -39,6 +51,7 @@ import type {
   CommitItem,
   DeploymentEvidence,
   MetricsInput,
+  PullRequestRef,
   ProductivityQuery,
   ReferenceMark,
   SessionItem,
@@ -53,24 +66,68 @@ const EventsBatch = z.object({ events: z.array(ProductivityEvent).min(1).max(25)
 export interface Caller {
   tenant_id: string;
   key_id: string;
+  /** identidad MagiHub (c.get('identity')) — se guarda en Session para integration-health */
+  key_fingerprint?: string;
+  key_name?: string;
 }
 
-/** Contexto que recibe el hook de scoring cuando un cambio pasa a "accepted". */
+type CodeAcceptedEvent = Extract<ProductivityEvent, { event_type: 'code.accepted' }>;
+
+/** Contexto que recibe el scoring cuando un cambio pasa a "accepted". */
 export interface AcceptedChangeContext {
   tenant_id: string;
   key_id: string;
   session_id: string;
   change_id: string;
-  event: Extract<ProductivityEvent, { event_type: 'code.accepted' }>;
+  event: CodeAcceptedEvent;
 }
 
+const ACCEPTED = new Set(['accepted', 'committed', 'in_reference']);
+const changeTime = (c: Pick<ChangeItem, 'accepted_at' | 'first_seen_at'>) => c.accepted_at ?? c.first_seen_at ?? '';
+
 /**
- * TODO(scoring): hook que el módulo `src/modules/scoring` completará (scoringService.scoreChange →
- * guardar `scores` en el Change). Se invoca tras escribir el Change en code.accepted; sus errores
- * se registran y NO hacen fallar la ingesta.
+ * ScoringContext del cambio (espejo de ml/export_dataset.py → build_dataset):
+ *  - tokens_total: usage de su petición + la cadena `regenerates` (tokens imputados completos);
+ *  - regenerations: largo de la cadena; latency_ms de la petición;
+ *  - session_acceptance_rate: aceptados / propuestos de la sesión hasta este cambio inclusive
+ *    (sin cambios ⇒ undefined ⇒ 0.6 en buildFeatures);
+ *  - task_type: `type` de la Task (Story/Bug…).
  */
-export async function onChangeAccepted(change: AcceptedChangeContext): Promise<void> {
-  void change;
+export function scoringContextFor(
+  ev: Pick<CodeAcceptedEvent, 'occurred_at'> & { payload: { change_id: string; ai_request_id: string } },
+  requests: Array<Pick<AiRequestItem, 'ai_request_id' | 'usage' | 'latency_ms' | 'regenerates'>>,
+  changes: Array<Pick<ChangeItem, 'change_id' | 'status' | 'accepted_at' | 'first_seen_at'>>,
+  taskType?: string | null,
+): ScoringContext {
+  const byId = new Map(requests.map((r) => [r.ai_request_id, r]));
+  const req = byId.get(ev.payload.ai_request_id);
+  let tokens = req?.usage?.total_tokens ?? 0;
+  let regenerations = 0;
+  let cur = req;
+  const seen = new Set<string>();
+  while (cur?.regenerates && !seen.has(cur.regenerates) && regenerations < 20) {
+    seen.add(cur.regenerates);
+    cur = byId.get(cur.regenerates);
+    tokens += cur?.usage?.total_tokens ?? 0;
+    regenerations++;
+  }
+  const t0 = ev.occurred_at;
+  const upTo = changes.filter((c) => c.change_id !== ev.payload.change_id && changeTime(c) <= t0);
+  const proposed = upTo.length + 1; // + el propio cambio (aceptado)
+  const accepted = upTo.filter((c) => ACCEPTED.has(c.status)).length + 1;
+  return {
+    tokens_total: req ? tokens : undefined,
+    regenerations,
+    ...(req ? { latency_ms: req.latency_ms } : {}),
+    session_acceptance_rate: accepted / proposed,
+    task_type: taskType ?? null,
+  };
+}
+
+export interface ProductivityDeps {
+  scoring?: ScoringService;
+  fireTrigger?: FireTrigger;
+  integrations?: Pick<IntegrationsRepository, 'listByTenant'>;
 }
 
 /** Sesiones que se consideran por consulta (las más recientes) y retrospectiva para sesiones largas. */
@@ -108,11 +165,20 @@ interface ScopeData {
 }
 
 export class ProductivityService {
+  private readonly scoring: ScoringService;
+  private readonly fireTrigger: FireTrigger;
+  private readonly integrations: Pick<IntegrationsRepository, 'listByTenant'>;
+
   constructor(
     private readonly repo: ProductivityRepository = productivityRepository,
     private readonly usage: UsageService = usageService,
     private readonly clock: () => Date = () => new Date(),
-  ) {}
+    deps: ProductivityDeps = {},
+  ) {
+    this.scoring = deps.scoring ?? scoringService;
+    this.fireTrigger = deps.fireTrigger ?? ((trigger, input) => taskSyncService.fireTrigger(trigger, input));
+    this.integrations = deps.integrations ?? integrationsRepository;
+  }
 
   // ── Ingesta ──────────────────────────────────────────────────────────────
 
@@ -130,6 +196,7 @@ export class ProductivityService {
     const state: PreState = { changes: new Map(), commits: new Map() };
     const loaded = new Set<string>();
     const seen = new Set<string>();
+    const prefixesOf = this.taskPrefixesLoader(t);
     let accepted = 0;
     let duplicates = 0;
 
@@ -144,7 +211,20 @@ export class ProductivityService {
         continue;
       }
       await this.preload(t, ev, state, loaded);
-      const proj = projectEvent({ tenant_id: t, key_id: caller.key_id, table: tableName(), now: this.clock().toISOString() }, ev, state);
+      const now = this.clock().toISOString();
+      const proj = projectEvent(
+        {
+          tenant_id: t,
+          key_id: caller.key_id,
+          table: tableName(),
+          now,
+          key_fingerprint: caller.key_fingerprint,
+          key_name: caller.key_name,
+          task_prefixes: await prefixesOf(ev.project_id),
+        },
+        ev,
+        state,
+      );
       try {
         await this.write(proj);
       } catch (err) {
@@ -156,20 +236,62 @@ export class ProductivityService {
       }
       accepted++;
       for (const cs of proj.changeStatuses) state.changes.set(cs.key, cs.status);
-      if (ev.event_type === 'git.committed') {
-        state.commits.set(commitRef(ev.repository, ev.payload.sha), {
-          session_id: ev.session_id,
-          change_ids: ev.payload.change_ids,
-        });
-      }
+      if (proj.commit) state.commits.set(proj.commit.key, proj.commit.value);
       if (ev.event_type === 'code.accepted') {
-        await onChangeAccepted({ tenant_id: t, key_id: caller.key_id, session_id: ev.session_id, change_id: ev.payload.change_id, event: ev }).catch(
-          (err) => logger.warn('onChangeAccepted falló', { change_id: ev.payload.change_id, err }),
-        );
+        const taskKey = eventTaskKeys(ev, await prefixesOf(ev.project_id))[0];
+        await this.scoreAccepted({ tenant_id: t, key_id: caller.key_id, session_id: ev.session_id, change_id: ev.payload.change_id, event: ev }, taskKey, now);
+      }
+      // reglas de write-back (commit.linked, session.started, reference.marked): nunca rompen la ingesta
+      for (const tr of proj.triggers) {
+        try {
+          await this.fireTrigger(tr.trigger, tr.input);
+        } catch (err) {
+          logger.warn('fireTrigger falló', { trigger: tr.trigger, ref: tr.input.ref, error: err instanceof Error ? err.message : String(err) });
+        }
       }
     }
 
     return { accepted, duplicates, attribution: await this.attributionHint(caller) };
+  }
+
+  /** Prefijos Jira/Linear por proyecto (misma fuente que webhooks.taskPrefixes), cacheados por lote. */
+  private taskPrefixesLoader(t: string): (projectId: string) => Promise<string[] | null> {
+    let all: Promise<Array<{ project_id: string; status: string; task_project_keys?: string[] }>> | undefined;
+    return async (projectId) => {
+      try {
+        all ??= this.integrations.listByTenant(t);
+        const prefixes = (await all)
+          .filter((i) => i.project_id === projectId && i.status !== 'disabled')
+          .flatMap((i) => i.task_project_keys ?? []);
+        return prefixes.length ? [...new Set(prefixes)] : null;
+      } catch (err) {
+        logger.warn('No se pudieron leer los prefijos de tareas; se usa la denylist', { error: err instanceof Error ? err.message : String(err) });
+        return null;
+      }
+    };
+  }
+
+  /**
+   * Scoring del cambio recién aceptado (XGBoost o heurística 'heuristic:v1') → `scores` en el Change
+   * (UpdateItem con attribute_exists). Errores registrados; NUNCA fallan la ingesta.
+   */
+  private async scoreAccepted(a: AcceptedChangeContext, taskKey: string | undefined, now: string): Promise<void> {
+    try {
+      const [requests, changes, task] = await Promise.all([
+        this.repo.listSessionPrefix<AiRequestItem>(a.tenant_id, a.session_id, 'R#'),
+        this.repo.listSessionPrefix<ChangeItem>(a.tenant_id, a.session_id, 'C#'),
+        taskKey ? this.repo.get<{ type?: string | null }>(keys.task(a.tenant_id, taskKey)) : Promise.resolve(undefined),
+      ]);
+      const ctx = scoringContextFor(a.event, requests, changes, task?.type);
+      const input = { ...scoringInputFromAcceptedEvent(a), branch: eventBranch(a.event), task_key: taskKey };
+      const { update } = await buildScoresUpdate(input, { ...ctx, tableName: tableName(), nowIso: now }, this.scoring);
+      await this.repo.update(update);
+    } catch (err) {
+      logger.warn('Scoring del cambio falló (la ingesta sigue)', {
+        change_id: a.change_id,
+        error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      });
+    }
   }
 
   /** core + linked en una sola transacción si caben (≤100); si no, linked (idempotente) primero. */
@@ -194,15 +316,30 @@ export class ProductivityService {
       case 'code.accepted':
       case 'code.rejected':
         return loadChanges([{ session: ev.session_id, change: ev.payload.change_id }]);
-      case 'git.committed':
+      case 'git.committed': {
+        // commit existente (push previo): sus task_keys/remote_url se unen a los del IDE
+        const ref = commitRef(ev.repository, ev.payload.sha);
+        if (!state.commits.has(ref) && !loaded.has(`K|${ref}`)) {
+          loaded.add(`K|${ref}`);
+          const prev = await this.repo.get<CommitItem>(keys.commit(t, ev.repository, ev.payload.sha.toLowerCase()));
+          if (prev) state.commits.set(ref, { session_id: prev.session_id, change_ids: prev.change_ids ?? [], task_keys: prev.task_keys, remote_url: prev.remote_url });
+        }
         return loadChanges(ev.payload.change_ids.map((c) => ({ session: ev.session_id, change: c })));
+      }
       case 'reference.marked': {
         const shas = [...new Set(ev.payload.included_shas.map((s) => s.toLowerCase()))];
         const missing = shas.filter((s) => !state.commits.has(commitRef(ev.repository, s)) && !loaded.has(`K|${commitRef(ev.repository, s)}`));
         if (missing.length) {
           const commits = await this.repo.batchGet<CommitItem>(missing.map((s) => keys.commit(t, ev.repository, s)));
           for (const s of missing) loaded.add(`K|${commitRef(ev.repository, s)}`);
-          for (const c of commits) state.commits.set(commitRef(c.repository, c.sha), { session_id: c.session_id, change_ids: c.change_ids ?? [] });
+          for (const c of commits) {
+            state.commits.set(commitRef(c.repository, c.sha), {
+              session_id: c.session_id,
+              change_ids: c.change_ids ?? [],
+              task_keys: c.task_keys,
+              remote_url: c.remote_url,
+            });
+          }
         }
         const refs = shas.flatMap((s) => {
           const c = state.commits.get(commitRef(ev.repository, s));
@@ -266,11 +403,14 @@ export class ProductivityService {
       return { ...p, commits };
     });
     const { from, to } = q;
+    // ?task_key: filas de la tarea o sin tarea en una sesión enlazada (mismo criterio que tasks)
+    const ofTask = (row: { task_key?: string }) => !q.task_key || !row.task_key || row.task_key === q.task_key;
+    const commitOfTask = (c: CommitItem) => !q.task_key || !c.task_keys?.length || c.task_keys.includes(q.task_key);
     return {
       sessions,
-      requests: parts.flatMap((p) => p.requests).filter((r) => inWindow(r.occurred_at, from, to)),
-      changes: parts.flatMap((p) => p.changes).filter((c) => inWindow(c.first_seen_at, from, to)),
-      commits: parts.flatMap((p) => p.commits).filter((c) => inWindow(c.committed_at, from, to)),
+      requests: parts.flatMap((p) => p.requests).filter((r) => inWindow(r.occurred_at, from, to) && ofTask(r)),
+      changes: parts.flatMap((p) => p.changes).filter((c) => inWindow(c.first_seen_at, from, to) && ofTask(c)),
+      commits: parts.flatMap((p) => p.commits).filter((c) => inWindow(c.committed_at, from, to) && commitOfTask(c)),
       references: parts.flatMap((p) => p.references).filter((r) => inWindow(r.occurred_at, from, to)),
       projectIds,
     };
@@ -295,9 +435,17 @@ export class ProductivityService {
     }
   }
 
-  private async deployments(t: string, commits: CommitItem[]): Promise<DeploymentEvidence[]> {
-    const lists = await mapLimit(commits, 8, (c) => this.repo.listDeploymentsOfSha(t, c.repository, c.sha).catch(() => []));
-    return lists.flat();
+  /** Deployments + PRs de los repos de los commits (regla de despliegue del commit o del merge de su PR). */
+  private async deploymentEvidence(t: string, commits: CommitItem[]): Promise<{ deployments: DeploymentEvidence[]; pullRequests: PullRequestRef[] }> {
+    const repos = [...new Set(commits.map((c) => c.repository))];
+    const parts = await mapLimit(repos, 4, async (r) => {
+      const [deps, prs] = await Promise.all([
+        this.repo.listDeploymentsOfRepo(t, r).catch(() => [] as DeploymentEvidence[]),
+        this.repo.listPullRequestsOfRepo(t, r).catch(() => [] as PullRequestRef[]),
+      ]);
+      return { deps, prs };
+    });
+    return { deployments: parts.flatMap((p) => p.deps), pullRequests: parts.flatMap((p) => p.prs) };
   }
 
   private async externalCounts(t: string, q: ProductivityQuery, projectIds: string[]) {
@@ -328,8 +476,8 @@ export class ProductivityService {
       scoped && usage && usage.granularity !== 'request'
         ? await this.repo.listRequestsOfKey(t, caller.key_id, q.from, q.to)
         : undefined;
-    const [deployments, external] = await Promise.all([
-      this.deployments(t, data.commits),
+    const [{ deployments, pullRequests }, external] = await Promise.all([
+      this.deploymentEvidence(t, data.commits),
       opts.withExternal ? this.externalCounts(t, q, data.projectIds) : Promise.resolve(undefined),
     ]);
     const scope: SummaryScope = {
@@ -355,6 +503,7 @@ export class ProductivityService {
       commits: data.commits,
       references: data.references,
       deployments,
+      pullRequests,
       external,
       now: this.clock().toISOString(),
     };

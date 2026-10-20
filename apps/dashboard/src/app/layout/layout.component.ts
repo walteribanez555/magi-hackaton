@@ -9,6 +9,7 @@ import { RuntimeConfigService } from '@/core/config/runtime-config.service';
 import { PERIODS, ScopeService, type PeriodId } from '@/core/data/scope.service';
 import { ScopeMenuComponent } from '@/shared/components/ui/scope-menu.component';
 import { environment } from '../../environments/environment';
+import { valueOf } from '@/shared/utils/resource';
 
 interface NavItem {
   label: string;
@@ -139,7 +140,7 @@ export class LayoutComponent {
 
   protected readonly periodOptions = PERIODS.map((p) => ({ id: p.id, label: p.label }));
   protected readonly projectOptions = computed(() =>
-    (this.scope.projects.value() ?? []).map((p) => ({ id: p.project_id, label: p.project_id, hint: p.repositories.join(', ') })),
+    (valueOf(this.scope.projects) ?? []).map((p) => ({ id: p.project_id, label: p.project_id, hint: p.repositories.join(', ') })),
   );
 
   private readonly url = toSignal(
@@ -153,7 +154,7 @@ export class LayoutComponent {
 
   /** Aviso global: repos no listos (webhooks obligatorios) y razones. */
   protected readonly notReady = computed(() => {
-    const r = this.scope.readiness.value();
+    const r = valueOf(this.scope.readiness);
     if (!r || r.ready) return null;
     const repos = (r.repositories ?? []).filter((x) => !x.ready);
     const reasons = r.blocking_reasons?.length ? r.blocking_reasons : repos.flatMap((x) => x.blocking_reasons ?? []);

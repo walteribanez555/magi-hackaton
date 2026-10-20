@@ -5,6 +5,7 @@ import { type Observable, catchError, map, of } from 'rxjs';
 
 import { SILENT_ERRORS } from '@/core/http/http-context';
 import type { KbArticleMeta } from './types';
+import { valueOf } from '@/shared/utils/resource';
 
 /** Normaliza public/kb/index.json: acepta `[...]`, `{ articles: [...] }` o `{ items: [...] }`. */
 export function normalizeKbIndex(raw: unknown): KbArticleMeta[] {
@@ -57,7 +58,7 @@ export class KbService {
       ),
   });
 
-  readonly articles = computed(() => [...(this.index.value() ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
+  readonly articles = computed(() => [...(valueOf(this.index) ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
 
   private readonly metricMap = computed(() => {
     const m = new Map<string, string>();

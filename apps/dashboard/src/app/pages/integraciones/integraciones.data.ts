@@ -109,8 +109,7 @@ export class IntegracionesData {
   integrations(projectId: string | null): Observable<Integration[]> {
     if (this.mock) return of(fixtureIntegrations());
     return this.api
-      .get<Integration[]>('integrations', { query: { project_id: projectId ?? undefined }, context: silent() })
-      .pipe(catchError(() => of([] as Integration[])));
+      .get<Integration[]>('integrations', { query: { project_id: projectId ?? undefined }, context: silent() });
   }
 
   /** GET /repositories; si no existe, la lista sale de los repos de cada proyecto. */
@@ -139,6 +138,7 @@ export class IntegracionesData {
       }).pipe(delay(200));
     }
     return this.integrations(projectId).pipe(
+      catchError(() => of([] as Integration[])),
       switchMap((list) => {
         const repositoryIntegration =
           list.find((i) => GIT.has(i.provider) && i.repository === repository && i.status !== 'disabled') ?? null;

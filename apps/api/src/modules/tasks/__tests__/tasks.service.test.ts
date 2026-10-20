@@ -6,11 +6,13 @@ import { PullRequestsRepository } from '../../pull-requests/pull-requests.reposi
 import { PullRequestsService } from '../../pull-requests/pull-requests.service';
 import { FakeStore } from '../../webhooks/__tests__/helpers';
 import { TasksRepository } from '../tasks.repository';
-import { aggregateTaskMetrics, TasksService } from '../tasks.service';
+import { aggregateTaskMetrics, allocateTaskTokens, TasksService, type TaskUsageSource } from '../tasks.service';
 
 const T = 't1';
 let store: FakeStore;
 let svc: TasksService;
+/** Sin snapshots de usage (fallback Σ reportado) salvo que el test lo cambie. */
+let usageSource: TaskUsageSource;
 
 function link(task: string, kind: 'branch' | 'session' | 'commit' | 'pr' | 'deployment', id: string, o: Record<string, unknown> = {}) {
   store.put({ ...keys.taskLink(T, task, kind, id), entity: 'TaskLink', task_key: task, kind, link_id: id, updated_at: '2026-10-20T10:00:00.000Z', ...o });
@@ -20,7 +22,12 @@ beforeEach(() => {
   store = new FakeStore();
   const prRepo = new PullRequestsRepository(store.asRepo());
   const branches = new BranchesRepository(store.asRepo());
-  svc = new TasksService(new TasksRepository(store.asRepo()), branches, prRepo, new PullRequestsService(prRepo, branches));
+  usageSource = { cachedWindow: async () => null, requestsOfKey: async () => [], mode: () => 'real' };
+  svc = new TasksService(new TasksRepository(store.asRepo()), branches, prRepo, new PullRequestsService(prRepo, branches), {
+    cachedWindow: (...a) => usageSource.cachedWindow(...a),
+    requestsOfKey: (...a) => usageSource.requestsOfKey(...a),
+    mode: () => usageSource.mode(),
+  });
 
   store.put({
     ...keys.task(T, 'MAG-123'),
@@ -67,7 +74,9 @@ beforeEach(() => {
   store.put({ ...keys.commit(T, 'acme/shop', 'a'.repeat(40)), sha: 'a'.repeat(40), repository: 'acme/shop', branch: 'feature/mag-123-login', committed_at: '2026-10-20T10:00:00Z', verified_remote: true, commit_source: 'git-local', automation: { ai_matched_lines: 30, commit_added_lines: 40, ai_share: 0.75 } });
   store.put({ ...keys.commit(T, 'acme/shop', 'b'.repeat(40)), sha: 'b'.repeat(40), repository: 'acme/shop', remote_branch: 'feature/mag-123-login', committed_at: '2026-10-20T11:00:00Z', verified_remote: true, remote_only: true, commit_source: 'git-remote', automation: { ai_matched_lines: 0, commit_added_lines: 0, ai_share: 0 } });
   store.put({ ...keys.branch(T, 'acme/shop', 'feature/mag-123-login'), ...keys.branchGsi1(T, 'shop', '2026-10-20T11:00:00.000Z'), repository: 'acme/shop', branch: 'feature/mag-123-login', task_keys: new Set(['MAG-123', 'MAG-777']), session_ids: new Set(['s1']), commit_shas: new Set(['a'.repeat(40), 'b'.repeat(40)]), last_activity_at: '2026-10-20T11:00:00.000Z' });
-  store.put({ ...keys.pullRequest(T, 'acme/shop', 42), repository: 'acme/shop', number: 42, state: 'merged', source_branch: 'feature/mag-123-login', target_branch: 'main', head_sha: 'b'.repeat(40), merge_sha: null, url: 'https://github.com/acme/shop/pull/42', task_keys: ['MAG-123'] });
+  store.put({ ...keys.pullRequest(T, 'acme/shop', 42), repository: 'acme/shop', number: 42, state: 'merged', source_branch: 'feature/mag-123-login', target_branch: 'main', head_sha: 'b'.repeat(40), merge_sha: 'c'.repeat(40), url: 'https://github.com/acme/shop/pull/42', task_keys: ['MAG-123'] });
+  // se desplegó el MERGE commit del PR #42 (no el SHA del commit de la sesión)
+  store.put({ ...keys.deployment(T, 'acme/shop', '2'), entity: 'Deployment', repository: 'acme/shop', deployment_id: '2', sha: 'c'.repeat(40), state: 'success' });
 });
 
 describe('aggregateTaskMetrics', () => {
@@ -156,5 +165,75 @@ describe('TasksService.detail', () => {
 
   it('aislamiento: otro tenant no ve la tarea', async () => {
     await expect(svc.detail('t2', 'MAG-123')).rejects.toSatisfy((e) => e instanceof HttpException && e.statusCode === 404);
+  });
+});
+
+describe('TaskListItem.deployed — misma regla que el embudo', () => {
+  it('desplegar el merge commit del PR de la rama del commit cuenta', async () => {
+    const t = (await svc.list(T, { project_id: 'shop' })).find((x) => x.task_key === 'MAG-123')!;
+    expect(t.deployed).toBe(true);
+  });
+
+  it('un TaskLink deployment success sin commit que case NO marca desplegado', async () => {
+    store.put({ ...store.getSync(keys.deployment(T, 'acme/shop', '2'))!, sha: 'd'.repeat(40) });
+    const t = (await svc.list(T, { project_id: 'shop' })).find((x) => x.task_key === 'MAG-123')!;
+    expect(t.deployed).toBe(false);
+  });
+
+  it('deployment failure del merge commit no cuenta', async () => {
+    store.put({ ...store.getSync(keys.deployment(T, 'acme/shop', '2'))!, state: 'failure' });
+    expect((await svc.detail(T, 'MAG-123')).deployed).toBe(false);
+  });
+});
+
+describe('TaskListItem.tokens — mismo método que el summary (allocateUsage)', () => {
+  const req = (id: string, tokens: number, at: string, task?: string) => ({
+    ai_request_id: id,
+    key_id: 'k1',
+    occurred_at: at,
+    usage: { total_tokens: tokens },
+    provenance: 'real',
+    ...(task ? { task_key: task } : {}),
+  });
+
+  it('granularidad request: Σ registros de la API de consumo por request_id', async () => {
+    const src: TaskUsageSource = {
+      cachedWindow: async () => ({
+        granularity: 'request',
+        provenance: 'real',
+        source: 'magihub-usage-api',
+        records: [
+          { request_id: 'r1', window_start: '2026-10-20T10:00:00.000Z', window_end: '2026-10-20T10:00:00.000Z', usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 1250 }, requests: 1 },
+        ],
+      }),
+      requestsOfKey: async () => [],
+      mode: () => 'real',
+    };
+    expect(await allocateTaskTokens(T, [req('r1', 1200, '2026-10-20T10:00:00.000Z')], true, src)).toEqual({ value: 1250, provenance: 'real' });
+  });
+
+  it('granularidad hora: prorrateo por usage reportado ⇒ estimated', async () => {
+    const mine = req('r1', 300, '2026-10-20T10:05:00.000Z');
+    const other = req('rX', 100, '2026-10-20T10:20:00.000Z');
+    const src: TaskUsageSource = {
+      cachedWindow: async () => ({
+        granularity: 'hour',
+        provenance: 'real',
+        source: 'magihub-usage-api',
+        records: [
+          { window_start: '2026-10-20T10:00:00.000Z', window_end: '2026-10-20T11:00:00.000Z', usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 480 }, requests: 2 },
+        ],
+      }),
+      requestsOfKey: async () => [mine, other] as never,
+      mode: () => 'real',
+    };
+    expect(await allocateTaskTokens(T, [mine], true, src)).toEqual({ value: 360, provenance: 'estimated' });
+  });
+
+  it('sin snapshots ⇒ Σ reportado (estimated); mock ⇒ simulated', async () => {
+    const r = [req('r1', 1200, '2026-10-20T10:00:00.000Z')];
+    expect(await allocateTaskTokens(T, r, true, usageSource)).toEqual({ value: 1200, provenance: 'estimated' });
+    expect(await allocateTaskTokens(T, r, true, { ...usageSource, mode: () => 'mock' })).toEqual({ value: 1200, provenance: 'simulated' });
+    expect(await allocateTaskTokens(T, [], false, usageSource)).toEqual({ value: null, provenance: 'estimated' });
   });
 });

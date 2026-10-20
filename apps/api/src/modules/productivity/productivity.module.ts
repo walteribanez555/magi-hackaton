@@ -33,7 +33,16 @@ function readQuery(c: Context<AppEnv>, defaultDays = 7): ProductivityQuery & { b
   return { ...q, ...win, refresh: q.refresh === 'true' || q.refresh === '1' };
 }
 
-const callerOf = (c: Context<AppEnv>) => ({ tenant_id: c.get('tenant_id'), key_id: c.get('key_id') });
+const callerOf = (c: Context<AppEnv>) => {
+  const id = c.get('identity');
+  return {
+    tenant_id: c.get('tenant_id'),
+    key_id: c.get('key_id'),
+    // huella sha256(key)[:12] y nombre de la key: Session los guarda para integration-health api_keys
+    ...(id?.key_fingerprint ? { key_fingerprint: id.key_fingerprint } : {}),
+    ...(id?.key_name ? { key_name: id.key_name } : {}),
+  };
+};
 
 productivityRouter.post('/events', async (c) => {
   let body: unknown;
