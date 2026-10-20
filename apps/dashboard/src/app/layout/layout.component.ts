@@ -78,7 +78,7 @@ interface NavItem {
         <div class="border-b border-rule px-4 sm:px-8" role="status">
           <div class="mx-auto flex max-w-[1376px] flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 text-sm">
             <span class="font-medium text-estimated">El proyecto no está listo:</span>
-            <span class="text-ink-2">{{ n.text }}</span>
+            <span class="text-ink-2" [attr.title]="n.detail || null">{{ n.text }}</span>
             <a [routerLink]="['/integraciones']" [queryParams]="n.repo ? { repo: n.repo } : {}" class="py-1">Revisar integraciones</a>
           </div>
         </div>
@@ -157,10 +157,14 @@ export class LayoutComponent {
     const r = valueOf(this.scope.readiness);
     if (!r || r.ready) return null;
     const repos = (r.repositories ?? []).filter((x) => !x.ready);
-    const reasons = r.blocking_reasons?.length ? r.blocking_reasons : repos.flatMap((x) => x.blocking_reasons ?? []);
-    const repoText = repos.length ? `${repos.map((x) => x.repository).join(', ')} · ` : '';
+    const names = repos.map((x) => x.repository);
+    const reasons = r.blocking_reasons ?? [];
+    const text = names.length
+      ? `${names.length === 1 ? 'el repositorio' : `${names.length} repositorios`} ${names.join(', ')} ${names.length === 1 ? 'no tiene' : 'no tienen'} sus webhooks obligatorios verificados.`
+      : (reasons[0] ?? 'faltan webhooks obligatorios por verificar.');
     return {
-      text: repoText + (reasons.length ? reasons.join(' · ') : 'faltan webhooks obligatorios por verificar'),
+      text,
+      detail: reasons.join(' · '),
       repo: repos[0]?.repository ?? null,
       onIntegrations: this.url().startsWith('/integraciones'),
     };

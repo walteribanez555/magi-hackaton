@@ -267,3 +267,121 @@ describe('listas', () => {
     expect(ten.committed_lines).toBe(18);
   });
 });
+
+describe('unidades del embudo (§2.5: no triviales en todas las etapas)', () => {
+  // c1: 20 líneas, 5 triviales; c2 rechazado (8 propuestas) en la misma sesión; c3 solo propuesto (4)
+  const unitInput = () =>
+    input({
+      changes: [
+        accepted('c1', 'r1', 20, { d: { trivial: 5 } }),
+        change('c2', 'r2', { status: 'rejected', proposed_added_lines: 8 }),
+        change('c3', 'r3', { proposed_added_lines: 4 }),
+      ],
+      commits: [commit(SHA1, ['c1'], 12, { automation: { commit_added_lines: 20, ai_matched_lines: 12, ai_share: 0.6, ai_lost_lines: 3, effective_lines: 9 } })],
+    });
+
+  it('accepted = lines − trivial; generated estima las triviales con la proporción de la sesión', () => {
+    const s = computeSummary(unitInput());
+    const [gen, acc, com] = s.funnel;
+    expect(acc!.lines.value).toBe(15);
+    // c1 exacto 15 + c2 round(8 × 0.75) = 6 + c3 round(4 × 0.75) = 3
+    expect(gen!.lines).toMatchObject({ value: 24, provenance: 'estimated' });
+    expect(acc!.conversion.value).toBeCloseTo(15 / 24, 4);
+    expect(com!.conversion.value).toBeCloseTo(12 / 15, 4);
+  });
+
+  it('lost_before_commit = ai_lost_lines / no triviales aceptadas commiteadas', () => {
+    expect(computeSummary(unitInput()).dimensions.automation.lost_before_commit.value).toBe(0.2); // 3 / 15
+  });
+
+  it('sin proporción de referencia (nada aceptado) ⇒ generated es cota superior', () => {
+    const s = computeSummary(input({ changes: [change('c2', 'r2', { status: 'rejected', proposed_added_lines: 8 })] }));
+    expect(s.funnel[0]!.lines).toMatchObject({ value: 8, provenance: 'estimated' });
+    expect(s.funnel[0]!.lines.note).toMatch(/cota superior/);
+  });
+
+  it('sesiones, timeline y by_model usan la misma unidad', () => {
+    const base = { ...unitInput(), requests: [request('r1', 1000)] };
+    expect(computeSessionItems(base)[0]!.accepted_lines).toBe(15);
+    expect(computeTimeline(base, 'day')[0]!.accepted_lines).toBe(15);
+    expect(computeSummary(base).by_model[0]!.accepted_lines).toBe(15);
+  });
+});
+
+describe('in_reference por included_shas', () => {
+  const SHA2 = 'b'.repeat(40);
+  it('solo cuentan los commits incluidos en el tag; se reparte surviving_lines entre ellos', () => {
+    const commits = [commit(SHA1, ['c1'], 10), commit(SHA2, ['c2'], 30, { committed_at: '2026-10-20T10:35:00.000Z' })];
+    // el tag solo incluye SHA1; surviving 8 de sus 10 líneas
+    const s = computeSummary(input({ commits, references: [ref('v1', 8, { included_shas: [SHA1], surviving_effective_lines: 6 })] }));
+    expect(s.funnel[3]!.lines.value).toBe(8);
+    expect(s.funnel[3]!.effective_lines.value).toBe(6);
+    // un tag posterior que incluye ambos manda para los dos (no se suman los tags)
+    const s2 = computeSummary(
+      input({
+        commits,
+        references: [ref('v1', 8, { included_shas: [SHA1] }), ref('v2', 36, { included_shas: [SHA1, SHA2], occurred_at: '2026-10-20T11:00:00.000Z' })],
+      }),
+    );
+    expect(s2.funnel[3]!.lines.value).toBe(36);
+    // referencia sin included_shas ⇒ 0 (no se cuentan líneas de commits que no están en el tag)
+    expect(computeSummary(input({ commits, references: [ref('v0', 40)] })).funnel[3]!.lines.value).toBe(0);
+  });
+});
+
+describe('desplegado por merge commit del PR', () => {
+  const MERGE = 'c'.repeat(40);
+  const base = () =>
+    input({
+      changes: [accepted('c1', 'r1', 20, { status: 'committed', commit_sha: SHA1 })],
+      commits: [commit(SHA1, ['c1'], 18, { branch: 'feature/MAG-1-x' })],
+      pullRequests: [{ repository: 'org/repo', number: 7, source_branch: 'feature/MAG-1-x', merge_sha: MERGE, head_sha: SHA1 }],
+    });
+
+  it('Deployment success del merge_sha de un PR cuya rama contiene el commit ⇒ desplegado', () => {
+    const s = computeSummary({ ...base(), deployments: [{ repository: 'org/repo', sha: MERGE.slice(0, 12), state: 'success', deployment_id: 'd9' }] });
+    expect(s.funnel[4]!.lines.value).toBe(18);
+    expect(s.counts.deployments_success).toBe(1);
+    const items = computeSessionItems({ ...base(), deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success', deployment_id: 'd9' }] });
+    expect(items[0]!.highest_stage).toBe('deployed');
+  });
+
+  it('PR de otra rama o deployment fallido ⇒ no desplegado', () => {
+    const other = { ...base(), pullRequests: [{ repository: 'org/repo', source_branch: 'feature/otra', merge_sha: MERGE }] };
+    expect(computeSummary({ ...other, deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success' }] }).funnel[4]!.lines.value).toBe(0);
+    expect(computeSummary({ ...base(), deployments: [{ repository: 'org/repo', sha: MERGE, state: 'failure' }] }).funnel[4]!.lines.value).toBe(0);
+  });
+
+  it('remote_branch (push) también vale como rama del commit', () => {
+    const b = base();
+    const s = computeSummary({
+      ...b,
+      commits: [commit(SHA1, ['c1'], 18, { remote_branch: 'feature/MAG-1-x' })],
+      deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success' }],
+    });
+    expect(s.funnel[4]!.lines.value).toBe(18);
+  });
+});
+
+describe('SessionListItem.tokens — misma imputación que el summary', () => {
+  it('granularidad request ⇒ registro por request_id (real); hora ⇒ prorrateo (estimated); mock ⇒ simulated', () => {
+    const exact = computeSessionItems(scenario());
+    expect(exact[0]!.tokens).toMatchObject({ value: 2000, provenance: 'real', source: 'magihub-usage-api' });
+
+    const hour = computeSessionItems(
+      input({
+        requests: [request('r1', 300, { occurred_at: '2026-10-20T10:05:00.000Z' })],
+        usage: {
+          granularity: 'hour',
+          provenance: 'real',
+          source: 'magihub-usage-api',
+          records: [usageRec(undefined, 480, { window_start: '2026-10-20T10:00:00.000Z', window_end: '2026-10-20T11:00:00.000Z' })],
+        },
+      }),
+    );
+    expect(hour[0]!.tokens).toMatchObject({ value: 480, provenance: 'estimated' });
+
+    expect(computeSessionItems({ ...scenario(), magihubMode: 'mock' })[0]!.tokens.provenance).toBe('simulated');
+    expect(computeSessionItems({ ...scenario(), usage: null })[0]!.tokens).toMatchObject({ value: 2000, provenance: 'estimated' });
+  });
+});

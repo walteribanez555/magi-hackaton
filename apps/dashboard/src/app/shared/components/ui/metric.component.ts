@@ -6,7 +6,7 @@ import { formatNumber, formatPercent, formatScore, isPresent } from '@/shared/ut
 import { HelpLinkComponent } from './help-link.component';
 import { ProvenanceComponent } from './provenance.component';
 
-export type MetricFormat = 'int' | 'dec1' | 'pct' | 'score';
+export type MetricFormat = 'int' | 'dec1' | 'pct' | 'score' | 'usd';
 
 /**
  * Cifra con su procedencia y su "?" a la guía. `null` → "—" con tooltip "sin denominador".
@@ -47,6 +47,8 @@ export class MetricComponent {
         return formatPercent(v);
       case 'score':
         return formatScore(v);
+      case 'usd':
+        return formatNumber(v, v !== null && v !== undefined && Math.abs(v) < 1 ? 4 : 2);
       case 'dec1':
         return formatNumber(v, 1);
       default:

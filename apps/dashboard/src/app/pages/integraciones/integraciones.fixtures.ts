@@ -1,4 +1,5 @@
 import type {
+  AutomationRule,
   CheckResult,
   Integration,
   IntegrationCreate,
@@ -187,4 +188,32 @@ export function fixtureTestRun(integrationId: string, mode: 'auto' | 'manual', t
     finished_at: done >= names.length ? new Date().toISOString() : null,
     latency_ms: done >= 2 ? 1400 : null,
   };
+}
+
+export function fixtureRules(integrationId: string): AutomationRule[] {
+  const t = ago(60);
+  return [
+    {
+      rule_id: 'rul_1',
+      integration_id: integrationId,
+      name: 'Enlazar commits con líneas IA',
+      enabled: true,
+      trigger: 'commit.linked',
+      when: {},
+      action: { kind: 'remote_link', url: '{{commit_url}}', title: 'Commit {{sha}} (MagiCode)', relation: 'commit' },
+      created_at: t,
+      updated_at: t,
+    },
+    {
+      rule_id: 'rul_2',
+      integration_id: integrationId,
+      name: 'PR abierto → En revisión',
+      enabled: false,
+      trigger: 'pr.opened',
+      when: { from_status_category: 'in_progress' },
+      action: { kind: 'transition', to_status: 'En revisión', comment: 'PR abierto: {{pr_url}}' },
+      created_at: t,
+      updated_at: t,
+    },
+  ];
 }

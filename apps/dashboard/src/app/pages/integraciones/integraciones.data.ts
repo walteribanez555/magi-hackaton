@@ -8,7 +8,11 @@ import type {
   IntegrationHealth,
   IntegrationTestRequest,
   IntegrationTestRun,
+  AutomationRule,
+  AutomationRuleUpsert,
+  GitProviderCredentials,
   RegisterWebhookResult,
+  TaskProviderCredentials,
   RepositoryOption,
   RepositoryReadiness,
 } from '@magicode/contracts';
@@ -23,6 +27,7 @@ import {
   fixtureIntegrations,
   fixtureReadiness,
   fixtureRepositories,
+  fixtureRules,
   fixtureTestRun,
 } from './integraciones.fixtures';
 
@@ -207,5 +212,36 @@ export class IntegracionesData {
   testRun(integrationId: string, testId: string, mode: 'auto' | 'manual'): Observable<IntegrationTestRun> {
     if (this.mock) return of(fixtureTestRun(integrationId, mode, ++this.mockTicks));
     return this.api.get<IntegrationTestRun>('integrationTestRun', { params: { integrationId, testId }, context: silent() });
+  }
+
+  saveCredentials(integrationId: string, body: GitProviderCredentials | TaskProviderCredentials): Observable<unknown> {
+    if (this.mock) return of(null).pipe(delay(300));
+    return this.api.put<unknown>('integrationCredentials', body, { params: { integrationId }, context: silent() });
+  }
+
+  rules(integrationId: string): Observable<AutomationRule[]> {
+    if (this.mock) return of(fixtureRules(integrationId)).pipe(delay(150));
+    return this.api.get<AutomationRule[]>('integrationRules', { params: { integrationId }, context: silent() });
+  }
+
+  createRule(integrationId: string, body: AutomationRuleUpsert): Observable<AutomationRule> {
+    if (this.mock) {
+      const now = new Date().toISOString();
+      return of({ ...body, rule_id: 'rul_' + Math.random().toString(36).slice(2, 8), integration_id: integrationId, created_at: now, updated_at: now });
+    }
+    return this.api.post<AutomationRule>('integrationRules', body, { params: { integrationId }, context: silent() });
+  }
+
+  updateRule(integrationId: string, ruleId: string, body: AutomationRuleUpsert): Observable<AutomationRule> {
+    if (this.mock) {
+      const now = new Date().toISOString();
+      return of({ ...body, rule_id: ruleId, integration_id: integrationId, created_at: now, updated_at: now });
+    }
+    return this.api.put<AutomationRule>('integrationRule', body, { params: { integrationId, ruleId }, context: silent() });
+  }
+
+  deleteRule(integrationId: string, ruleId: string): Observable<unknown> {
+    if (this.mock) return of(null);
+    return this.api.delete<unknown>('integrationRule', { params: { integrationId, ruleId }, context: silent() });
   }
 }

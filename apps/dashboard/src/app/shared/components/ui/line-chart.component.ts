@@ -40,6 +40,7 @@ function niceMax(v: number): number {
 @Component({
   selector: 'app-line-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { class: 'block w-full min-w-0' },
   template: `
     <figure class="m-0">
       @if (series().length > 1) {

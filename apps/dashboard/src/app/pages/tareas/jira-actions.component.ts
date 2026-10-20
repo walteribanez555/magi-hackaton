@@ -1,7 +1,8 @@
 import { HttpContext } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
-import type { AvailableTransition, OutboxAction, OutboxStatus } from '@magicode/contracts';
+import type { AutomationRule, AvailableTransition, OutboxAction, OutboxStatus, TaskAction } from '@magicode/contracts';
+import { catchError, forkJoin, map, of } from 'rxjs';
 
 import { TasksService } from '@/core/data/tasks.service';
 import { ApiClient } from '@/core/http/api-client';
@@ -70,15 +71,38 @@ const STATUS: Record<OutboxStatus, { label: string; tone: Tone }> = {
         }
       }
 
-      <div class="mt-4 flex items-baseline justify-between">
+      <form class="flex flex-wrap items-end gap-x-6 gap-y-4 border-t border-rule pt-5 pb-2 mt-4" (submit)="sendComment($event)">
+        <label class="flex flex-[1_1_480px] flex-col gap-1.5 text-[13px] text-ink-2">
+          Comentar en el issue
+          <textarea
+            rows="3"
+            maxlength="8000"
+            class="min-h-11 rounded-[4px] border border-field bg-bg px-3 py-2.5 font-sans text-[15px] text-ink"
+            [value]="commentBody()"
+            (input)="commentBody.set($any($event.target).value)"
+          ></textarea>
+        </label>
+        <button
+          type="submit"
+          class="min-h-11 cursor-pointer rounded-[4px] border border-ink bg-bg px-5 py-3 font-sans text-[15px] font-semibold text-ink disabled:cursor-not-allowed disabled:opacity-50"
+          [disabled]="!commentBody().trim() || sending()"
+        >
+          Comentar
+        </button>
+      </form>
+
+      <div class="mt-6 flex items-baseline justify-between gap-4">
         <h3 class="m-0 text-[15px] font-semibold">Auditoría</h3>
+        @if (polling()) {
+          <span class="text-[13px] text-muted" aria-live="polite">Actualizando cada 5 s mientras haya acciones en curso</span>
+        }
         <button type="button" class="cursor-pointer py-2 text-sm text-accent hover:text-accent-hover" (click)="actions.reload()">
           Actualizar
         </button>
       </div>
       @if (actions.error()) {
         <p class="m-0 border-t border-rule py-5 text-[15px] text-ink-2">No se pudo cargar la auditoría.</p>
-      } @else if ((actions.value() ?? []).length === 0) {
+      } @else if (sorted().length === 0) {
         <p class="m-0 border-t border-rule py-5 text-[15px] text-ink-2">
           {{ actions.isLoading() ? 'Cargando…' : 'Sin acciones enviadas a Jira para esta tarea.' }}
         </p>
@@ -102,7 +126,11 @@ const STATUS: Record<OutboxStatus, { label: string; tone: Tone }> = {
                     @if (a.origin.type === 'manual') {
                       Manual · <span class="font-mono text-[13px]">{{ a.origin.key_id }}</span>
                     } @else {
-                      Regla <span class="font-mono text-[13px]">{{ a.origin.rule_id }}</span>
+                      @if (ruleNames()[a.origin.rule_id]; as name) {
+                        Regla «{{ name }}»
+                      } @else {
+                        Regla <span class="font-mono text-[13px]">{{ a.origin.rule_id }}</span>
+                      }
                     }
                   </td>
                   <td [class]="td">
@@ -133,6 +161,9 @@ export class JiraActionsComponent {
   protected readonly selected = signal('');
   protected readonly comment = signal('');
   protected readonly sending = signal(false);
+  protected readonly commentBody = signal('');
+  protected readonly polling = signal(false);
+  private pollStartedAt: number | null = null;
 
   protected readonly transitions = rxResource({
     params: () => this.taskKey(),
@@ -154,8 +185,57 @@ export class JiraActionsComponent {
     stream: ({ params }) => this.tasksApi.actions(params, true),
   });
 
+  private readonly actionList = computed(() => (this.actions.hasValue() ? this.actions.value() : []));
+
+  /** Nombres de reglas automáticas por rule_id (integraciones que aparecen en la auditoría). */
+  private readonly rules = rxResource({
+    params: () => {
+      const ids = new Set<string>();
+      for (const a of this.actionList()) if (a.origin.type === 'rule') ids.add(a.integration_id);
+      return ids.size ? [...ids].sort().join(',') : undefined;
+    },
+    stream: ({ params }) =>
+      forkJoin(
+        params.split(',').map((integrationId) =>
+          this.api
+            .get<AutomationRule[]>('integrationRules', {
+              params: { integrationId },
+              context: new HttpContext().set(SILENT_ERRORS, true),
+            })
+            .pipe(catchError(() => of([] as AutomationRule[]))),
+        ),
+      ).pipe(map((lists) => lists.flat())),
+  });
+
+  protected readonly ruleNames = computed<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const r of this.rules.hasValue() ? this.rules.value() : []) out[r.rule_id] = r.name;
+    return out;
+  });
+
+  constructor() {
+    // Polling: cada 5 s mientras haya acciones pending/sending, como máximo 60 s seguidos.
+    effect((onCleanup) => {
+      const list = this.actionList();
+      const busy = list.some((a) => a.status === 'pending' || a.status === 'sending');
+      if (!busy) {
+        this.pollStartedAt = null;
+        this.polling.set(false);
+        return;
+      }
+      this.pollStartedAt ??= Date.now();
+      if (Date.now() - this.pollStartedAt > 60_000) {
+        this.polling.set(false);
+        return;
+      }
+      this.polling.set(true);
+      const timer = setTimeout(() => this.actions.reload(), 5000);
+      onCleanup(() => clearTimeout(timer));
+    });
+  }
+
   protected readonly sorted = computed(() =>
-    [...(this.actions.value() ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [...this.actionList()].sort((a, b) => b.created_at.localeCompare(a.created_at)),
   );
 
   protected describe(a: OutboxAction): string {
@@ -176,21 +256,34 @@ export class JiraActionsComponent {
     const t = (this.transitions.value() ?? []).find((x) => x.id === this.selected());
     if (!t || this.sending()) return;
     const comment = this.comment().trim();
+    this.enqueue(
+      { kind: 'transition', transition_id: t.id, to_status: t.to_status, ...(comment ? { comment } : {}) },
+      `Transición → ${t.to_status}`,
+      () => {
+        this.selected.set('');
+        this.comment.set('');
+      },
+    );
+  }
+
+  protected sendComment(e: Event): void {
+    e.preventDefault();
+    const body = this.commentBody().trim();
+    if (!body || this.sending()) return;
+    this.enqueue({ kind: 'comment', body_markdown: body }, 'Comentario', () => this.commentBody.set(''));
+  }
+
+  private enqueue(action: TaskAction, what: string, done: () => void): void {
     this.sending.set(true);
-    this.tasksApi
-      .enqueueAction(this.taskKey(), {
-        action: { kind: 'transition', transition_id: t.id, to_status: t.to_status, ...(comment ? { comment } : {}) },
-        idempotency_key: crypto.randomUUID(),
-      })
-      .subscribe({
-        next: () => {
-          this.sending.set(false);
-          this.selected.set('');
-          this.comment.set('');
-          this.toast.success('Acción enviada a la cola', { description: `Transición → ${t.to_status}` });
-          this.actions.reload();
-        },
-        error: () => this.sending.set(false),
-      });
+    this.tasksApi.enqueueAction(this.taskKey(), { action, idempotency_key: crypto.randomUUID() }).subscribe({
+      next: () => {
+        this.sending.set(false);
+        done();
+        this.toast.success('Acción enviada a la cola', { description: what });
+        this.pollStartedAt = null;
+        this.actions.reload();
+      },
+      error: () => this.sending.set(false),
+    });
   }
 }

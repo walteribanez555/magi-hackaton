@@ -1,25 +1,56 @@
+import { HttpContext } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { rxResource, toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import type { TaskDetail, TaskSessionView } from '@magicode/contracts';
-import { map } from 'rxjs';
+import type {
+  ChangeListItem,
+  Provenance,
+  SessionListItem,
+  TaskCommitView,
+  TaskDetail,
+  TaskSessionView,
+} from '@magicode/contracts';
+import { catchError, map, of } from 'rxjs';
 
 import { ApiClient } from '@/core/http/api-client';
-import { AgoPipe, DateTimePipe, NumPipe, ShaPipe } from '@/shared/components/ui/format.pipes';
+import { SILENT_ERRORS } from '@/core/http/http-context';
+import { AgoPipe, DateTimePipe, NumPipe } from '@/shared/components/ui/format.pipes';
 import { ProvenanceComponent } from '@/shared/components/ui/provenance.component';
 import { SectionComponent } from '@/shared/components/ui/section.component';
 import { LoadingComponent, StateComponent } from '@/shared/components/ui/states.component';
 import { CriticalityComponent, StatusMarkComponent } from '@/shared/components/ui/status-mark.component';
-import { PR_STATE_LABEL } from '@/shared/labels/labels';
-import { formatDuration, formatNumber, formatPercent } from '@/shared/utils/format';
+import { PR_STATE_LABEL, STAGE_SHORT } from '@/shared/labels/labels';
+import {
+  formatDateTime,
+  formatDuration,
+  formatNumber,
+  formatPercent,
+  formatScore,
+  formatSigned,
+  shortSha,
+} from '@/shared/utils/format';
 import { JiraActionsComponent } from './jira-actions.component';
 import { TD, TH, taskStatusLabel, taskTone } from './tareas.shared';
 
 interface SessionRow {
-  s: TaskSessionView;
-  duration: string;
-  commits: number;
-  aiLines: number | null;
+  id: string;
+  start: string | null;
+  requests: number | null;
+  tokens: number | null;
+  prov: Provenance | null;
+  accepted: number | null;
+  effective: number | null;
+  stage: string;
+}
+
+interface TraceRow {
+  kind: string;
+  id: string;
+  href?: string | null;
+  detail: string;
+  link: string;
+  indent: 0 | 1 | 2;
+  fill: 'ink' | 'bg' | 'rule';
 }
 
 @Component({
@@ -29,7 +60,6 @@ interface SessionRow {
     NumPipe,
     DateTimePipe,
     AgoPipe,
-    ShaPipe,
     ProvenanceComponent,
     SectionComponent,
     LoadingComponent,
@@ -101,63 +131,36 @@ interface SessionRow {
         </div>
       </dl>
 
-      <app-section title="Enlaces" headingId="h-links">
-        <span hint>Ramas, commits, pull requests y despliegues enlazados con la tarea</span>
+      <app-section title="Trazabilidad" headingId="h-trace">
+        <span hint>Cómo se enlazó cada elemento con la tarea</span>
         <ol class="m-0 list-none p-0">
-          @for (b of t.linked.branches; track b.repository + b.branch) {
-            <li [class]="li">
-              <span class="pt-0.5 text-xs text-muted">Rama</span>
-              <div class="min-w-0">
-                <div class="font-mono text-sm [overflow-wrap:anywhere]">{{ b.branch }}</div>
-                <div class="text-sm text-ink-2">
-                  {{ b.repository }} · {{ b.commits | num }} commits · {{ b.sessions | num }} sesiones{{ b.merged_into ? ' · fusionada en ' + b.merged_into : '' }}
-                </div>
-              </div>
-            </li>
-          }
-          @for (c of t.linked.commits; track c.sha) {
-            <li [class]="li">
-              <span class="pt-0.5 text-xs text-muted">Commit</span>
-              <div class="min-w-0">
-                <div class="font-mono text-sm">{{ c.sha | sha }}</div>
-                <div class="text-sm text-ink-2">{{ commitDetail(c) }}</div>
-              </div>
-            </li>
-          }
-          @for (pr of t.linked.pull_requests; track pr.repository + pr.number) {
-            <li [class]="li">
-              <span class="pt-0.5 text-xs text-muted">Pull request</span>
-              <div class="min-w-0">
+          @for (r of trace(); track $index) {
+            <li
+              class="grid grid-cols-[88px_20px_minmax(0,1fr)] items-start gap-x-3 border-t border-rule py-3.5 first:border-t-0 sm:grid-cols-[120px_28px_minmax(0,1fr)_minmax(0,220px)] sm:gap-x-4"
+            >
+              <span class="pt-0.5 text-xs text-muted">{{ r.kind }}</span>
+              <span aria-hidden="true" class="flex justify-center" [class]="indentClass[r.indent]">
+                <span class="mt-1.5 size-[9px] border-[1.5px] border-ink" [class]="fillClass[r.fill]"></span>
+              </span>
+              <div class="min-w-0" [class]="indentClass[r.indent]">
                 <div class="font-mono text-sm [overflow-wrap:anywhere]">
-                  <a [href]="pr.url" target="_blank" rel="noopener" class="no-underline">#{{ pr.number }}</a> · {{ pr.source_branch }} → {{ pr.target_branch }}
+                  @if (r.href) {
+                    <a [href]="r.href" target="_blank" rel="noopener" class="no-underline">{{ r.id }}</a>
+                  } @else {
+                    {{ r.id }}
+                  }
                 </div>
-                <div class="text-sm text-ink-2">{{ prState(pr.state) }} · {{ pr.ai.commits_with_ai | num }} commits con líneas IA</div>
+                <div class="text-sm text-ink-2">{{ r.detail }}</div>
               </div>
-            </li>
-          }
-          @for (d of t.linked.deployments; track d.deployment_id) {
-            <li [class]="li">
-              <span class="pt-0.5 text-xs text-muted">Despliegue</span>
-              <div class="min-w-0">
-                <div class="font-mono text-sm">{{ d.environment ?? '—' }} · {{ d.sha | sha }}</div>
-                <div class="text-sm text-ink-2">{{ d.state ?? '—' }}{{ d.deployed ? ' · desplegado' : '' }}</div>
-              </div>
-            </li>
-          } @empty {
-            <li [class]="li">
-              <span class="pt-0.5 text-xs text-muted">Despliegue</span>
-              <div class="min-w-0">
-                <div class="font-mono text-sm">sin evidencia</div>
-                <div class="text-sm text-ink-2">ningún deployment success para estos SHA</div>
-              </div>
+              <span class="col-start-3 text-[13px] text-muted sm:col-start-auto sm:text-right">{{ r.link }}</span>
             </li>
           }
         </ol>
       </app-section>
 
       <app-section title="Sesiones de MagiCode" headingId="h-sessions">
-        <span hint>{{ sessions().length | num }} {{ sessions().length === 1 ? 'sesión' : 'sesiones' }}</span>
-        @if (sessions().length === 0) {
+        <span hint>{{ sessionsHint() }}</span>
+        @if (sessionRows().length === 0) {
           <p class="m-0 py-5 text-[15px] text-ink-2">Sin sesiones de MagiCode enlazadas.</p>
         } @else {
           <div class="overflow-x-auto">
@@ -166,21 +169,23 @@ interface SessionRow {
                 <tr>
                   <th scope="col" [class]="th">Sesión</th>
                   <th scope="col" [class]="th">Inicio</th>
-                  <th scope="col" [class]="th">Duración</th>
-                  <th scope="col" [class]="th">Rama</th>
-                  <th scope="col" [class]="th + ' text-right'">Commits</th>
-                  <th scope="col" [class]="th + ' text-right'">Líneas IA en commits</th>
+                  <th scope="col" [class]="th + ' text-right'">Peticiones</th>
+                  <th scope="col" [class]="th + ' text-right'">Tokens</th>
+                  <th scope="col" [class]="th + ' text-right'">Aceptadas</th>
+                  <th scope="col" [class]="th + ' text-right'">Efectivas</th>
+                  <th scope="col" [class]="th">Llegó a</th>
                 </tr>
               </thead>
               <tbody class="font-mono">
-                @for (r of sessions(); track r.s.session_id) {
+                @for (r of sessionRows(); track r.id) {
                   <tr class="border-t border-rule">
-                    <td [class]="td + ' [overflow-wrap:anywhere]'">{{ r.s.session_id }}</td>
-                    <td [class]="td + ' whitespace-nowrap text-ink-2'">{{ r.s.started_at | datetime }}</td>
-                    <td [class]="td + ' whitespace-nowrap text-ink-2'">{{ r.duration }}</td>
-                    <td [class]="td + ' text-[13px] text-ink-2 [overflow-wrap:anywhere]'">{{ r.s.branch ?? '—' }}</td>
-                    <td [class]="td + ' text-right'">{{ r.commits | num }}</td>
-                    <td [class]="td + ' text-right'">{{ r.aiLines | num }}</td>
+                    <td [class]="td + ' [overflow-wrap:anywhere]'">{{ r.id }}</td>
+                    <td [class]="td + ' whitespace-nowrap text-ink-2'">{{ r.start | datetime }}</td>
+                    <td [class]="td + ' text-right'">{{ r.requests | num }}</td>
+                    <td [class]="td + ' text-right whitespace-nowrap'">{{ r.tokens | num }}<app-prov [p]="r.tokens === null ? null : r.prov" /></td>
+                    <td [class]="td + ' text-right'">{{ r.accepted | num }}</td>
+                    <td [class]="td + ' text-right'">{{ r.effective | num: 1 }}</td>
+                    <td [class]="td + ' font-sans text-ink-2'">{{ r.stage }}</td>
                   </tr>
                 }
               </tbody>
@@ -204,9 +209,6 @@ export class TaskDetailPage {
 
   protected readonly th = TH;
   protected readonly td = TD;
-  protected readonly li =
-    'grid grid-cols-[120px_minmax(0,1fr)] items-start gap-x-4 border-t border-rule py-3.5 first:border-t-0';
-
   protected readonly taskKey = toSignal(this.route.paramMap.pipe(map((p) => p.get('taskKey') ?? '')), {
     initialValue: '',
   });
@@ -217,38 +219,206 @@ export class TaskDetailPage {
   });
 
   protected readonly tokensPer100 = computed(() => {
-    const t = this.task.value();
+    const t = this.task.hasValue() ? this.task.value() : null;
     const tokens = t?.tokens.value;
     if (!t || tokens === null || tokens === undefined || !t.effective_lines) return null;
     return Math.round((tokens / t.effective_lines) * 100);
   });
 
-  protected readonly sessions = computed<SessionRow[]>(() => {
-    const t = this.task.value();
+  /** Sesiones con tokens/peticiones (GET /productivity/sessions?task_key); si falla, las de linked. */
+  private readonly sessionList = rxResource({
+    params: () => {
+      const t = this.task.hasValue() ? this.task.value() : null;
+      return t ? { project_id: t.project_id, task_key: t.task_key } : undefined;
+    },
+    stream: ({ params }) =>
+      this.api
+        .get<SessionListItem[]>('sessions', { query: params, context: new HttpContext().set(SILENT_ERRORS, true) })
+        .pipe(catchError(() => of(null))),
+  });
+
+  /** Cambios de la tarea para la trazabilidad (opcional: sin ellos, la lista sigue). */
+  private readonly changes = rxResource({
+    params: () => {
+      const t = this.task.hasValue() ? this.task.value() : null;
+      return t ? { project_id: t.project_id, task_key: t.task_key } : undefined;
+    },
+    stream: ({ params }) =>
+      this.api
+        .get<ChangeListItem[]>('changes', { query: params, context: new HttpContext().set(SILENT_ERRORS, true) })
+        .pipe(catchError(() => of([] as ChangeListItem[]))),
+  });
+
+  protected readonly sessionRows = computed<SessionRow[]>(() => {
+    const t = this.task.hasValue() ? this.task.value() : null;
     if (!t) return [];
-    const commits = t.linked?.commits ?? [];
-    return (t.linked?.sessions ?? []).map((s) => {
-      const own = commits.filter((c) => c.session_id === s.session_id);
-      const known = own.filter((c) => c.ai_matched_lines !== null);
-      return {
-        s,
-        duration: formatDuration(s.started_at, s.ended_at),
-        commits: own.length,
-        aiLines: known.length ? known.reduce((n, c) => n + (c.ai_matched_lines ?? 0), 0) : null,
-      };
+    const rich = this.sessionList.hasValue() ? this.sessionList.value() : null;
+    if (rich && rich.length) {
+      return rich.map((s) => ({
+        id: s.session_id,
+        start: s.started_at,
+        requests: s.ai_requests,
+        tokens: s.tokens.value,
+        prov: s.tokens.provenance,
+        accepted: s.accepted_lines,
+        effective: s.effective_lines,
+        stage: STAGE_SHORT[s.highest_stage] ?? s.highest_stage,
+      }));
+    }
+    return (t.linked?.sessions ?? []).map((s) => ({
+      id: s.session_id,
+      start: s.started_at,
+      requests: null,
+      tokens: null,
+      prov: null,
+      accepted: null,
+      effective: null,
+      stage: '—',
+    }));
+  });
+
+  protected readonly sessionsHint = computed(() => {
+    const rows = this.sessionRows();
+    const n = rows.length;
+    const req = rows.reduce((acc, r) => acc + (r.requests ?? 0), 0);
+    const base = `${formatNumber(n)} ${n === 1 ? 'sesión' : 'sesiones'}`;
+    return req ? `${base} · ${formatNumber(req)} ${req === 1 ? 'petición' : 'peticiones'} a Smart Auto` : base;
+  });
+
+  protected readonly indentClass: Record<0 | 1 | 2, string> = { 0: 'pl-0', 1: 'pl-5', 2: 'pl-10' };
+  protected readonly fillClass: Record<TraceRow['fill'], string> = { ink: 'bg-ink', bg: 'bg-bg', rule: 'bg-rule' };
+
+  /** Tarea → Rama → Sesión → Cambio/Commit; luego PRs y despliegues. */
+  protected readonly trace = computed<TraceRow[]>(() => {
+    const t = this.task.hasValue() ? this.task.value() : null;
+    if (!t) return [];
+    const linked = t.linked ?? { sessions: [], commits: [], branches: [], pull_requests: [], deployments: [] };
+    const rich = new Map((this.sessionList.hasValue() ? (this.sessionList.value() ?? []) : []).map((s) => [s.session_id, s]));
+    const changes = this.changes.hasValue() ? this.changes.value() : [];
+    const rows: TraceRow[] = [];
+    const usedSessions = new Set<string>();
+    const usedCommits = new Set<string>();
+    const key = t.task_key.toLowerCase();
+
+    rows.push({
+      kind: t.url ? 'Tarea · Jira' : 'Tarea',
+      id: t.task_key,
+      href: t.url,
+      detail: `estado ${taskStatusLabel(t)}`,
+      link: t.url ? 'issue del gestor' : 'clave en ramas y commits',
+      indent: 0,
+      fill: 'ink',
     });
+
+    const pushCommit = (c: TaskCommitView, indent: 0 | 1 | 2) => {
+      usedCommits.add(c.sha);
+      rows.push({
+        kind: 'Commit',
+        id: shortSha(c.sha),
+        detail: commitDetail(c),
+        link: commitLink(c),
+        indent,
+        fill: 'bg',
+      });
+    };
+
+    const pushSession = (s: TaskSessionView, indent: 0 | 1) => {
+      usedSessions.add(s.session_id);
+      const r = rich.get(s.session_id);
+      rows.push({
+        kind: 'Sesión',
+        id: s.session_id,
+        detail: r
+          ? `${formatNumber(r.ai_requests)} peticiones · ${formatNumber(r.tokens.value)} tokens`
+          : `inicio ${formatDateTime(s.started_at)} · ${formatDuration(s.started_at, s.ended_at)}`,
+        link: s.branch ? 'branch del evento' : 'task_key del evento',
+        indent,
+        fill: 'bg',
+      });
+      const child = (indent + 1) as 1 | 2;
+      for (const ch of changes.filter((x) => x.session_id === s.session_id)) {
+        const f = ch.files[0];
+        const added = ch.files.reduce((n, x) => n + x.added, 0);
+        const deleted = ch.files.reduce((n, x) => n + x.deleted, 0);
+        rows.push({
+          kind: 'Cambio',
+          id: f ? `${ch.change_id} · ${f.path}${ch.files.length > 1 ? ` +${ch.files.length - 1}` : ''}` : ch.change_id,
+          detail: `${formatSigned(added, '+')} ${formatSigned(deleted, '-')} · importancia ${formatScore(ch.importance_score)} · redundancia ${formatScore(ch.redundancy_score)}`,
+          link: `ai_request_id ${ch.ai_request_id}`,
+          indent: child,
+          fill: 'bg',
+        });
+      }
+      for (const c of linked.commits.filter((x) => x.session_id === s.session_id && !usedCommits.has(x.sha))) {
+        pushCommit(c, child);
+      }
+    };
+
+    for (const b of linked.branches) {
+      rows.push({
+        kind: 'Rama',
+        id: b.branch,
+        detail: `${b.repository} · ${formatNumber(b.commits)} commits${b.merged_into ? ` · fusionada en ${b.merged_into}` : ''}`,
+        link: b.branch.toLowerCase().includes(key) ? 'clave en el nombre' : 'commits con la clave',
+        indent: 0,
+        fill: 'bg',
+      });
+      for (const s of linked.sessions.filter((x) => x.branch === b.branch && !usedSessions.has(x.session_id))) {
+        pushSession(s, 1);
+      }
+      for (const c of linked.commits.filter((x) => x.branch === b.branch && !usedCommits.has(x.sha))) {
+        pushCommit(c, 1);
+      }
+    }
+    for (const s of linked.sessions.filter((x) => !usedSessions.has(x.session_id))) pushSession(s, 0);
+    for (const c of linked.commits.filter((x) => !usedCommits.has(x.sha))) pushCommit(c, 0);
+
+    for (const pr of linked.pull_requests) {
+      rows.push({
+        kind: 'Pull request',
+        id: `#${pr.number} · ${pr.source_branch} → ${pr.target_branch}`,
+        href: pr.url,
+        detail: `${PR_STATE_LABEL[pr.state] ?? pr.state} · ${formatNumber(pr.ai.commits_with_ai)} commits con líneas IA`,
+        link: pr.source_branch.toLowerCase().includes(key) ? 'rama de origen' : 'clave en el título',
+        indent: 0,
+        fill: 'bg',
+      });
+    }
+
+    if (linked.deployments.length === 0) {
+      rows.push({
+        kind: 'Despliegue',
+        id: 'sin evidencia',
+        detail: 'ningún deployment success para estos SHA',
+        link: '—',
+        indent: 0,
+        fill: 'rule',
+      });
+    }
+    for (const d of linked.deployments) {
+      rows.push({
+        kind: 'Despliegue',
+        id: `${d.environment ?? '—'} · ${shortSha(d.sha)}`,
+        href: d.url,
+        detail: `${d.state ?? '—'}${d.deployed ? ' · desplegado' : ''}`,
+        link: 'SHA del commit o del PR',
+        indent: 0,
+        fill: d.deployed ? 'ink' : 'bg',
+      });
+    }
+    return rows;
   });
 
   protected readonly tone = taskTone;
   protected readonly statusLabel = taskStatusLabel;
+}
 
-  protected prState(s: string): string {
-    return PR_STATE_LABEL[s] ?? s;
-  }
+function commitDetail(c: TaskCommitView): string {
+  if (c.ai_share === null || c.ai_matched_lines === null) return `${c.repository} · solo remoto, sin cruce de hashes`;
+  return `${formatPercent(c.ai_share, 0)} del commit vino de la IA · ${formatNumber(c.ai_matched_lines)} de ${formatNumber(c.commit_added_lines)} líneas`;
+}
 
-  protected commitDetail(c: TaskDetail['linked']['commits'][number]): string {
-    const origin = c.verified_remote ? 'SHA verificado por webhook' : 'reportado por el IDE';
-    if (c.ai_share === null || c.ai_matched_lines === null) return `${c.repository} · solo remoto, sin cruce de hashes`;
-    return `${formatPercent(c.ai_share, 0)} del commit vino de la IA · ${formatNumber(c.ai_matched_lines)} de ${formatNumber(c.commit_added_lines)} líneas · ${origin}`;
-  }
+function commitLink(c: TaskCommitView): string {
+  const how = c.ai_matched_lines !== null ? 'hashes de línea' : 'clave en la rama';
+  return c.verified_remote ? `${how} · SHA verificado por webhook` : `${how} · reportado por el IDE`;
 }

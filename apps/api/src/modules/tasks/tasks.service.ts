@@ -191,9 +191,16 @@ export class TasksService {
    * un PR cuya rama origen lo contiene.
    */
   async deployedFor(tenantId: string, links: TaskLinkItem[], cache: Map<string, Promise<RepoEvidence>> = new Map()): Promise<boolean> {
-    const commits = links
+    const refs = links
       .filter((l) => l.kind === 'commit' && l.repository)
       .map((l) => ({ repository: l.repository!, sha: l.sha ?? l.link_id, branch: l.branch ?? null }));
+    if (!refs.length) return false;
+    // rama del Commit (IDE: branch · push: remote_branch); la del enlace como respaldo
+    const rows = new Map((await this.repo.commits(tenantId, refs)).map((c) => [`${c.repository}|${String(c.sha).toLowerCase()}`, c]));
+    const commits = refs.map((r) => {
+      const c = rows.get(`${r.repository}|${r.sha.toLowerCase()}`);
+      return { ...r, branch: s(c?.branch) ?? r.branch, remote_branch: s(c?.remote_branch) };
+    });
     for (const repo of new Set(commits.map((c) => c.repository))) {
       let p = cache.get(repo);
       if (!p) {

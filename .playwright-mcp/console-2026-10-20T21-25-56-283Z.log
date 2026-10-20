@@ -1,0 +1,5 @@
+[     203ms] [LOG] Angular is running in development mode. @ http://localhost:4200/@fs/Users/walter/Desktop/work/token-tracker/apps/dashboard/.angular/cache/21.2.27/dashboard/vite/deps/chunk-FYAMC2TQ.js?v=3382dc09:11225
+[   22841ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4200/styles.css:0
+[   22843ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4200/@vite/client:0
+[   22843ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4200/main.js:0
+[   23018ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4200/favicon.ico:0

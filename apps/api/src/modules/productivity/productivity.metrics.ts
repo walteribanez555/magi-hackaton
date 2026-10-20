@@ -122,7 +122,8 @@ export function generatedNonTrivial(changes: ChangeItem[]): { lines: number; est
       upperBound = true;
       ratio = 0;
     }
-    lines += Math.round(proposed * (1 - ratio));
+    // nunca menos que lo aceptado del propio cambio (el usuario pudo agregar al editar)
+    lines += Math.max(Math.round(proposed * (1 - ratio)), isAccepted(c) ? acceptedNonTrivial(c).lines : 0);
   }
   return { lines, estimated, upperBound };
 }
@@ -342,6 +343,35 @@ export function deployedCommits(commits: CommitItem[], deployments: DeploymentEv
   return commits.filter((c) => deploymentsOfCommit(c, deployments, prs).length > 0);
 }
 
+type LinesOf = Map<CommitItem, { lines: number; effective: number }>;
+
+/**
+ * Líneas IA de cada commit en la unidad del embudo, con TOPE en lo aceptado: las ai_matched_lines
+ * de un commit no pueden superar las líneas no triviales aceptadas (aún no consumidas por commits
+ * anteriores) de sus change_ids del alcance. Evita committed > accepted por hashes repetidos
+ * (`return null;`) o cambios aceptados fuera de la ventana. effective_lines se escala igual.
+ */
+export function committedLinesByCommit(commits: CommitItem[], changes: ChangeItem[]): LinesOf {
+  const remaining = new Map<string, number>();
+  for (const c of changes) if (isAccepted(c)) remaining.set(`${c.session_id}|${c.change_id}`, acceptedNonTrivial(c).lines);
+  const out: LinesOf = new Map();
+  for (const c of [...commits].sort((a, b) => a.committed_at.localeCompare(b.committed_at))) {
+    const ids = [...new Set(c.change_ids ?? [])].map((id) => `${c.session_id}|${id}`);
+    const cap = sum(ids, (k) => remaining.get(k));
+    const matched = c.automation.ai_matched_lines;
+    let take = Math.min(matched, cap);
+    const lines = take;
+    for (const k of ids) {
+      const r = remaining.get(k) ?? 0;
+      const used = Math.min(r, take);
+      remaining.set(k, r - used);
+      take -= used;
+    }
+    out.set(c, { lines, effective: matched > 0 ? c.automation.effective_lines * (lines / matched) : 0 });
+  }
+  return out;
+}
+
 /** ¿La referencia incluye el commit? (mismo repo + SHA ∈ included_shas, por prefijo). */
 const refIncludes = (r: ReferenceMark, c: CommitItem): boolean =>
   sameRepository(r.repository, c.repository) && r.included_shas.some((s) => shaEq(s, c.sha));
@@ -349,17 +379,22 @@ const refIncludes = (r: ReferenceMark, c: CommitItem): boolean =>
 /**
  * Líneas IA de cada commit presentes en una referencia (in_reference o deployed):
  * se toma la referencia MÁS RECIENTE que incluye el commit en `included_shas` y se reparte su
- * `surviving_lines` entre los commits conocidos que incluye, en proporción a sus ai_matched_lines
- * (tope: las del propio commit). Un commit que no está en included_shas no aporta nada.
+ * `surviving_lines` entre los commits conocidos que incluye, en proporción a sus líneas committed
+ * (`base`, ya topadas por lo aceptado; tope: las del propio commit ⇒ in_reference ≤ committed). Un commit que no está en included_shas no aporta nada.
  */
-export function referenceLinesByCommit(commits: CommitItem[], refs: ReferenceMark[]): Map<CommitItem, { lines: number; effective: number; ref: ReferenceMark }> {
+export function referenceLinesByCommit(
+  commits: CommitItem[],
+  refs: ReferenceMark[],
+  base: LinesOf,
+): Map<CommitItem, { lines: number; effective: number; ref: ReferenceMark }> {
   const out = new Map<CommitItem, { lines: number; effective: number; ref: ReferenceMark }>();
+  const own = (c: CommitItem) => base.get(c) ?? { lines: 0, effective: 0 };
   const denom = new Map<ReferenceMark, { lines: number; effective: number }>();
   const denomOf = (r: ReferenceMark) => {
     let d = denom.get(r);
     if (!d) {
       const inc = commits.filter((c) => refIncludes(r, c));
-      d = { lines: sum(inc, (c) => c.automation.ai_matched_lines), effective: sum(inc, (c) => c.automation.effective_lines) };
+      d = { lines: sum(inc, (c) => own(c).lines), effective: sum(inc, (c) => own(c).effective) };
       denom.set(r, d);
     }
     return d;
@@ -370,8 +405,8 @@ export function referenceLinesByCommit(commits: CommitItem[], refs: ReferenceMar
     const d = denomOf(latest);
     const share = (own: number, total: number, surviving: number) => (total > 0 ? own * Math.min(1, surviving / total) : 0);
     out.set(c, {
-      lines: share(c.automation.ai_matched_lines, d.lines, latest.surviving_lines),
-      effective: share(c.automation.effective_lines, d.effective, latest.surviving_effective_lines),
+      lines: share(own(c).lines, d.lines, latest.surviving_lines),
+      effective: share(own(c).effective, d.effective, latest.surviving_effective_lines),
       ref: latest,
     });
   }
@@ -423,14 +458,24 @@ function stageLines(input: MetricsInput): StageLines[] {
       ? 'git-remote'
       : 'git-local';
   const comProv = worst(itemsProvenance(commits), 'estimated');
+  const comByCommit = committedLinesByCommit(commits, changes);
+  const comVals = [...comByCommit.values()];
+  const capped = commits.some((c) => (comByCommit.get(c)?.lines ?? 0) < c.automation.ai_matched_lines);
   const committed: StageLines = {
     stage: 'committed',
-    lines: m(sum(commits, (c) => c.automation.ai_matched_lines), comProv, gitSrc, 'Líneas del commit que coinciden con hashes IA.'),
-    effective: m(sum(commits, (c) => c.automation.effective_lines), comProv, gitSrc),
+    lines: m(
+      sum(comVals, (x) => x.lines),
+      comProv,
+      gitSrc,
+      capped
+        ? 'Líneas del commit que coinciden con hashes IA, con tope en las no triviales aceptadas de sus cambios del alcance.'
+        : 'Líneas del commit que coinciden con hashes IA.',
+    ),
+    effective: m(sum(comVals, (x) => x.effective), comProv, gitSrc),
   };
 
   // En versión de referencia: solo commits incluidos (included_shas) en una referencia.
-  const inRefByCommit = referenceLinesByCommit(commits, references);
+  const inRefByCommit = referenceLinesByCommit(commits, references, comByCommit);
   const refsUsed = [...new Set([...inRefByCommit.values()].map((x) => x.ref))];
   const refProv = worst(itemsProvenance(refsUsed), 'estimated');
   const inRef: StageLines = {
@@ -446,7 +491,7 @@ function stageLines(input: MetricsInput): StageLines[] {
 
   // Desplegado: por commit, máx(referencia kind=deployment que lo incluye, Deployment success del
   // commit o del merge/head de su PR).
-  const depByRef = referenceLinesByCommit(commits, references.filter((r) => r.kind === 'deployment'));
+  const depByRef = referenceLinesByCommit(commits, references.filter((r) => r.kind === 'deployment'), comByCommit);
   const depCommits = new Set(deployedCommits(commits, deployments, input.pullRequests));
   let depLines = 0;
   let depEff = 0;
@@ -455,8 +500,9 @@ function stageLines(input: MetricsInput): StageLines[] {
     const r = depByRef.get(c);
     const ev = depCommits.has(c);
     if (!r && !ev) continue;
-    depLines += Math.max(r?.lines ?? 0, ev ? c.automation.ai_matched_lines : 0);
-    depEff += Math.max(r?.effective ?? 0, ev ? c.automation.effective_lines : 0);
+    const own = comByCommit.get(c) ?? { lines: 0, effective: 0 };
+    depLines += Math.max(r?.lines ?? 0, ev ? own.lines : 0);
+    depEff += Math.max(r?.effective ?? 0, ev ? own.effective : 0);
     depItems.push(c);
     if (r) depItems.push(r.ref);
   }
@@ -600,20 +646,28 @@ export function computeTokens(input: MetricsInput): ComputedTokens {
       )
     : m(0, total.provenance, total.source, 'No reconciliable: no hay datos de la API de consumo.');
 
+  // PARTICIÓN de las peticiones: aceptadas > regeneraciones redundantes > resto (rechazos/errores/exploración).
+  // on_accepted + on_redundant_regenerations + on_rejected = Σ tokens por petición (+ unreconciled ≈ total).
   const acceptedReq = new Set(input.changes.filter(isAccepted).map((c) => c.ai_request_id).filter(Boolean) as string[]);
+  const redundant = redundantRegenerations(input.requests);
+  const redundantIds = new Set(redundant.map((r) => r.ai_request_id));
   const onAccepted = sumRequests(
     input.requests.filter((r) => acceptedReq.has(r.ai_request_id)),
     perRequest,
     total,
   );
   const onRejected = sumRequests(
-    input.requests.filter((r) => !acceptedReq.has(r.ai_request_id)),
+    input.requests.filter((r) => !acceptedReq.has(r.ai_request_id) && !redundantIds.has(r.ai_request_id)),
     perRequest,
     total,
-    'Peticiones sin cambio aceptado (rechazos, errores, exploración).',
+    'Peticiones sin cambio aceptado (rechazos, errores, exploración), sin las regeneraciones redundantes.',
   );
-  const redundant = redundantRegenerations(input.requests);
-  const onRedundant = sumRequests(redundant, perRequest, total, 'Peticiones cuyo output_hash repite uno anterior de la sesión.');
+  const onRedundant = sumRequests(
+    redundant.filter((r) => !acceptedReq.has(r.ai_request_id)),
+    perRequest,
+    total,
+    'Peticiones no aceptadas cuyo output_hash repite uno anterior de la sesión.',
+  );
 
   const withDims = input.changes.filter((c) => isAccepted(c) && c.dimensions);
   const mechShare = ratio(
@@ -745,9 +799,10 @@ export function computeTimeline(input: MetricsInput, bucket: 'hour' | 'day'): Ti
     p.accepted_lines += acceptedNonTrivial(c).lines;
     p.effective_lines = round(p.effective_lines + (c.dimensions?.effective_lines ?? 0));
   }
+  const com = committedLinesByCommit(input.commits, input.changes);
   for (const c of input.commits) {
     const p = at(c.committed_at);
-    if (p) p.committed_lines += c.automation.ai_matched_lines;
+    if (p) p.committed_lines += com.get(c)?.lines ?? 0;
   }
   return [...points.values()];
 }

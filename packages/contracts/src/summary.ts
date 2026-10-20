@@ -37,13 +37,18 @@ export const TokenBreakdown = z.object({
   reported_by_requests: Measured,
   /** total − reported (≠0 ⇒ otro proceso usó la key o hay latencia de ingesta) */
   unreconciled: Measured,
-  /** tokens de peticiones con ≥1 cambio aceptado */
+  /**
+   * PARTICIÓN de las peticiones (cada una cae en un solo grupo):
+   *   on_accepted + on_redundant_regenerations + on_rejected = Σ tokens por petición (≈ reported_by_requests)
+   *   y + unreconciled ≈ total.
+   * tokens de peticiones con ≥1 cambio aceptado
+   */
   on_accepted: Measured,
-  /** tokens de peticiones rechazadas/errores — costo de exploración */
+  /** peticiones sin cambio aceptado (rechazos/errores/exploración) que NO son regeneración redundante */
   on_rejected: Measured,
-  /** tokens de regeneraciones con salida casi idéntica (output_hash repetido) */
+  /** peticiones NO aceptadas cuyo output_hash repite uno anterior de la sesión */
   on_redundant_regenerations: Measured,
-  /** tokens proporcionales a líneas mecánicas (automatizables sin LLM) */
+  /** SUBCONJUNTO de on_accepted: tokens_on_accepted × mechanical_share (no suma en la partición) */
   on_mechanical: Measured,
   cost_usd: Measured, // value=null si MagiHub no expone costo verificable
 });
@@ -59,7 +64,7 @@ export const DimensionsSummary = z.object({
     intra_change: z.number(),
     existing_in_repo: z.number(),
     repeated_in_session: z.number(),
-    redundant_regenerations: z.number(), // nº de peticiones
+    redundant_regenerations: z.number(), // nº de peticiones con output_hash repetido (aceptadas o no)
   }),
   automation: z.object({
     /** % de las líneas de los commits que vino de IA */

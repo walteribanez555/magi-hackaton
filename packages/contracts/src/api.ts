@@ -21,9 +21,9 @@ export const ROUTES = {
 
   // Multitenant enlazado: proyecto → tarea → rama (todas aceptan ?project_id)
   tasks: '/tasks', // GET ?project_id&status_category → TaskListItem[]
-  task: '/tasks/:taskKey', // GET → TaskListItem & { sessions, commits, branches, pull_requests, summary }
+  task: '/tasks/:taskKey', // GET → TaskDetail (TaskListItem + linked{sessions, commits, branches, pull_requests, deployments} + criticality)
   branches: '/branches', // GET ?project_id&repository → BranchListItem[]
-  pullRequests: '/pull-requests', // GET ?project_id&repository&state
+  pullRequests: '/pull-requests', // GET ?project_id&repository&state → { data: PullRequestListItem[], meta: PullRequestTotals (histórico) }
 
   // Integraciones y webhooks (repo origen + gestor de tareas)
   integrations: '/integrations', // GET (sin secretos) · POST IntegrationCreate → IntegrationCreated (secreto 1 vez)
