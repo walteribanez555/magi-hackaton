@@ -33,6 +33,8 @@ export interface AppConfig {
     demoApiKey?: string;
   };
   usage: { staleSeconds: number; maxWindowDays: number };
+  /** entornos cuyo Deployment success cuenta como "desplegado" (DEPLOY_PRODUCTION_ENVIRONMENTS) */
+  deployments: { productionEnvironments: string[] };
   /** secreto RDS (JSON {host,port,username,password,dbname}) — solo projector/migrator */
   dbSecretArn?: string;
 }
@@ -80,6 +82,12 @@ class Config {
       usage: {
         staleSeconds: Number(e.USAGE_STALE_SECONDS || 300),
         maxWindowDays: Number(e.USAGE_MAX_WINDOW_DAYS || 90),
+      },
+      deployments: {
+        productionEnvironments: (e.DEPLOY_PRODUCTION_ENVIRONMENTS || 'production,prod')
+          .split(',')
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean),
       },
       dbSecretArn: e.DB_SECRET_ARN || undefined,
     };

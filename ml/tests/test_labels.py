@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from export_dataset import build_dataset
+from export_dataset import build_dataset, deployed_commit_shas
 from labels import rework_label, survival_label
 
 NOW = datetime(2026, 10, 20, tzinfo=timezone.utc)
@@ -40,7 +40,7 @@ def test_rework_explicit_signal():
 
 
 def test_rework_by_later_change_deleting_same_file_within_14_days():
-    later = ch(change_id='c2', occurred_at='2026-09-05T10:00:00Z',
+    later = ch(change_id='c2', session_id='s2', occurred_at='2026-09-05T10:00:00Z',
                files=[{'path': 'src/a.ts', 'added': 2, 'deleted': 4}])
     assert rework_label(ch(), [later], [], NOW) == 1
 
@@ -120,3 +120,36 @@ def test_dynamo_change_item_shape_accepted_files_and_accepted_at():
     later = {'change_id': 'c10', 'accepted_at': '2026-09-02T10:00:00Z',
              'accepted_files': [{'path': 'src/a.ts', 'added': 0, 'deleted': 2}]}
     assert rework_label(item, [later], [], NOW) == 1
+
+
+def test_rework_same_session_iteration_is_not_rework():
+    base = ch(session_id='s1')
+    # mismo archivo, misma sesión, 2 h después: el dev iteró sobre su propio cambio
+    iter_ = ch(change_id='c2', session_id='s1', occurred_at='2026-09-01T12:00:00Z',
+               files=[{'path': 'src/a.ts', 'added': 3, 'deleted': 5}])
+    assert rework_label(base, [iter_], [], NOW) == 0
+    # misma sesión pero ≥ 24 h después ⇒ sí cuenta
+    next_day = ch(change_id='c3', session_id='s1', occurred_at='2026-09-02T11:00:00Z',
+                  files=[{'path': 'src/a.ts', 'added': 3, 'deleted': 5}])
+    assert rework_label(base, [next_day], [], NOW) == 1
+    # otra sesión, 2 h después ⇒ cuenta
+    other = ch(change_id='c4', session_id='s2', occurred_at='2026-09-01T12:00:00Z',
+               files=[{'path': 'src/a.ts', 'added': 3, 'deleted': 5}])
+    assert rework_label(base, [other], [], NOW) == 1
+
+
+def test_survival_no_deployed_status():
+    """ChangeListItem no tiene estado `deployed`: solo in_reference o evidencia (deployed_at / SHA)."""
+    assert survival_label(ch(status='deployed'), set(), set(), NOW) == 0
+    assert survival_label(ch(deployed_at='2026-09-03T00:00:00Z'), set(), set(), NOW) == 1
+
+
+def test_deployed_commit_shas_merge_commit_of_pr_counts():
+    commits = [{'sha': 'a' * 40, 'repository': 'org/r', 'branch': 'feature/x'},
+               {'sha': 'b' * 40, 'repository': 'org/r', 'remote_branch': 'feature/y'}]
+    prs = [{'repository': 'org/r', 'source_branch': 'feature/x', 'merge_sha': 'c' * 12, 'head_sha': 'a' * 40},
+           {'repository': 'org/r', 'source_branch': 'feature/y', 'merge_sha': 'd' * 40, 'head_sha': 'b' * 40}]
+    deps = [{'repository': 'org/r', 'sha': 'c' * 40, 'state': 'success', 'environment': 'production'},
+            {'repository': 'org/r', 'sha': 'd' * 40, 'state': 'failure', 'environment': 'production'},
+            {'repository': 'org/r', 'sha': 'b' * 40, 'state': 'success', 'environment': 'staging'}]
+    assert deployed_commit_shas(commits, deps, prs) == {'a' * 40}

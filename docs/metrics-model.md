@@ -15,7 +15,8 @@ Tokens MagiHub (reales: API key + intervalo)
       └─ Aceptado    code.accepted         → el usuario aplicó   (+ 3 aristas)
           └─ En Git  git.committed         → hashes de líneas ∈ diff del commit
               └─ En versión demo  reference.marked  → líneas presentes en el SHA del tag
-                  └─ Desplegado   reference.marked{kind=deployment} SOLO con evidence_url
+                  └─ Desplegado   reference.marked{kind=deployment} con evidence_url, o Deployment
+                                  success a producción del commit o del merge commit de su PR
 ```
 
 Los tokens se imputan **completos** (incluye rechazos, errores y regeneraciones): son el costo
@@ -82,6 +83,23 @@ vacías y no triviales** (las triviales — `}`, `);` — no se pueden rastrear 
 repiten en todas partes). **Generado** cuenta lo propuesto con el mismo criterio. Así las
 conversiones (`committed / accepted`, `in_reference / accepted`) comparan cosas equivalentes y
 `lost_before_commit = ai_lost_lines / líneas no triviales aceptadas`.
+
+Cómo se obtiene cada etapa (`productivity.metrics.ts`):
+
+- **Aceptado** = Σ `importance.lines − importance.by_kind.trivial`.
+- **Generado**: `code.proposed` solo trae `files[].added` (sin `by_kind`). Si el cambio se aceptó
+  tal cual, se usa su valor exacto; si no, `propuestas × (1 − proporción trivial)` con la proporción
+  del propio cambio (si se aceptó editado) o la de lo aceptado en la misma sesión (o del alcance) ⇒
+  `estimated`; sin ninguna proporción de referencia queda como cota superior (nota). Nunca menor
+  que lo aceptado del cambio.
+- **En Git** = Σ por commit de `min(ai_matched_lines, no triviales aceptadas aún no consumidas de
+  sus change_ids del alcance)`: el embudo es monótono (hashes repetidos no inflan la etapa).
+- **En versión** = por commit, `surviving_lines` de la referencia más reciente que lo incluye en
+  `included_shas`, repartido entre sus commits incluidos (tope: las líneas En Git del commit).
+- **Desplegado** = por commit, máx(referencia `kind=deployment` que lo incluye, líneas En Git si hay
+  Deployment `success` a producción — `DEPLOY_PRODUCTION_ENVIRONMENTS` — de su SHA o del
+  merge/head del PR de su rama). Su conversión se calcula contra **En Git** (puede desplegarse
+  por el merge del PR sin tag).
 
 ## 3. KPIs
 

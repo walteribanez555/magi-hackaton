@@ -43,6 +43,12 @@ const Envelope = {
   repository: z.string().min(1).max(256), // "org/repo" o ruta lógica del repo local
   /** rama activa al emitir el evento — enlaza sesión ↔ rama ↔ tarea */
   branch: z.string().max(256).optional(),
+  /**
+   * developer que trabaja en el IDE: `git config user.email` (minúsculas). Habilita el filtro
+   * por developer; el dashboard muestra `developer_name` si viene.
+   */
+  developer: z.string().max(254).optional(),
+  developer_name: z.string().max(120).optional(),
   /** tarea (Jira) explícita o inferida de la rama con extractTaskKeys */
   task_key: z.string().regex(/^[A-Z][A-Z0-9]{1,9}-\d{1,7}$/).optional(),
   source: z.enum(['ide-extension', 'demo-seed']),

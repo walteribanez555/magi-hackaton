@@ -2,9 +2,11 @@
 Etiquetas de entrenamiento a partir de datos REALES (funciones puras, testeadas en tests/).
 
 survival  — P(un cambio IA aceptado llega a la versión de referencia / despliegue)
-  1  si el Change está en estado `in_reference` (o trae in_reference_at / deployed_at /
-     reference_tags), o su commit_sha está incluido en
-     una Reference (`included_shas` / `sha`) o en un Deployment con state=success.
+  1  si el Change está en estado `in_reference` (único estado final de ChangeListItem: no existe
+     un estado `deployed`), o trae in_reference_at / deployed_at / reference_tags, o su
+     commit_sha está incluido en una Reference (`included_shas` / `sha`) o tiene evidencia de
+     despliegue: Deployment success de su SHA o del merge_sha/head_sha de un PR cuya rama origen
+     contiene el commit (misma regla que la API, export_dataset.deployed_commit_shas).
   0  si pasó la ventana de observación (HORIZON_DAYS desde occurred_at) sin llegar.
   None (censurado: se EXCLUYE del entrenamiento) si aún está dentro de la ventana — todavía
      puede llegar; contarlo como 0 sesgaría el modelo hacia abajo.
@@ -12,8 +14,10 @@ survival  — P(un cambio IA aceptado llega a la versión de referencia / despli
 rework    — P(el cambio requiere retrabajo en ≤ 14 días)
   1  si el ítem trae una señal explícita (`rework`=true o `lines_rewritten_14d` > 0, campo
      PROPUESTO para el contrato), o
-     si otro cambio aceptado del MISMO repositorio, posterior y dentro de 14 días, borra líneas
-     en alguno de los mismos archivos (files[].deleted > 0 en la misma ruta), o
+     si otro cambio aceptado del MISMO repositorio, posterior y dentro de 14 días, toca alguno de
+     los mismos archivos reescribiendo/borrando líneas (files[].deleted > 0 en la misma ruta) Y
+     viene de OTRA sesión o llega ≥ 24 h después (iterar dentro de la misma sesión — aceptar y
+     ajustar al rato — NO es retrabajo), o
      si una tarea de tipo Bug creada/actualizada dentro de esos 14 días está enlazada a
      commits que tocan los mismos archivos.
   0  si pasaron los 14 días sin ninguna señal.
@@ -28,7 +32,9 @@ from typing import Any, Iterable, Mapping, Optional, Set
 from features import BUG_TYPES, change_files, change_time
 
 HORIZON_DAYS = 14
-SURVIVED_STATUSES = {'in_reference', 'deployed'}
+# misma sesión: solo cuenta como retrabajo si llega al menos tantas horas después
+SAME_SESSION_MIN_HOURS = 24
+SURVIVED_STATUSES = {'in_reference'}
 
 
 def parse_ts(v: Any) -> Optional[datetime]:
@@ -85,13 +91,17 @@ def rework_label(
     t1 = t0 + timedelta(days=horizon_days)
     paths = file_paths(change)
     cid = change.get('change_id')
+    sid = change.get('session_id')
 
     for other in later_changes:
-        if other.get('change_id') == cid:
+        if other.get('change_id') == cid and other.get('session_id') == sid:
             continue
         t = parse_ts(change_time(other))
         if t is None or not (t0 < t <= t1):
             continue
+        same_session = bool(sid) and other.get('session_id') == sid
+        if same_session and t - t0 < timedelta(hours=SAME_SESSION_MIN_HOURS):
+            continue  # iteración dentro de la sesión, no retrabajo
         for f in change_files(other):
             if f.get('path') in paths and float(f.get('deleted') or 0) > 0:
                 return 1

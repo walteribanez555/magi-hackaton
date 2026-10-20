@@ -11,25 +11,29 @@ Tokens MagiHub (API key + intervalo)
           └─ committed     git.committed                líneas IA presentes en el diff del commit
               └─ in_reference   reference.marked        líneas IA presentes en el SHA del tag
                   └─ deployed   reference.marked{kind=deployment} con evidence_url
-                                o Deployment state=success (webhook) del mismo SHA
+                                o Deployment success A PRODUCCIÓN (webhook) del SHA del commit
+                                o del merge_sha/head_sha del PR de su rama
 ```
+
+**Unidad única** (`docs/metrics-model.md` §2.5): todas las etapas cuentan **líneas agregadas no vacías y no triviales** (las triviales como `}` o `);` no se rastrean por hash). Así cada conversión compara lo mismo con lo mismo.
 
 ## Cómo se calcula
 
 Cada etapa es un `FunnelStep` en `ProductivitySummary.funnel[]` con `stage`, `lines`, `effective_lines`, `tokens_per_100_lines`, `tokens_per_100_effective_lines` y `conversion`.
 
-| etapa (`stage`) | `lines`                                                                 | `effective_lines`                                |
+| etapa (`stage`) | `lines` (no triviales)                                                  | `effective_lines`                                |
 |-----------------|-------------------------------------------------------------------------|--------------------------------------------------|
-| `generated`     | Σ líneas agregadas propuestas de **todos** los cambios (aceptados y rechazados); si falta la propuesta, se usa `accepted_added_lines` | `null` (las aristas se calculan al aceptar) |
-| `accepted`      | Σ `accepted_added_lines` de cambios con estado `accepted`, `committed` o `in_reference` | Σ `dimensions.effective_lines`                 |
-| `committed`     | Σ `automation.ai_matched_lines` de los commits del alcance              | Σ `automation.effective_lines`                   |
-| `in_reference`  | `surviving_lines` de la **última** referencia de cada sesión            | `surviving_effective_lines` de esa referencia    |
-| `deployed`      | por sesión: máx(`surviving_lines` de la última referencia `kind=deployment`, Σ `ai_matched_lines` de commits cuyo SHA tiene un Deployment `success` en el mismo repo) | ídem con líneas efectivas |
+| `generated`     | por cambio: si se aceptó tal cual, `importance.lines − by_kind.trivial`; si no, `proposed_added_lines × (1 − proporción trivial)` (la del propio cambio si se aceptó editado; si no, la de lo aceptado en la **misma sesión**; si tampoco, la del alcance). Nunca menos que lo aceptado del cambio. `estimated` en cuanto hay una estimación; sin proporción de referencia es cota superior (nota) | `null` (las aristas se calculan al aceptar) |
+| `accepted`      | Σ `importance.lines − importance.by_kind.trivial` de cambios `accepted`, `committed` o `in_reference` (sin `dimensions` ⇒ `accepted_added_lines`, cota superior, `estimated`) | Σ `dimensions.effective_lines`                 |
+| `committed`     | Σ por commit de `min(automation.ai_matched_lines, no triviales aceptadas de sus change_ids del alcance aún no consumidas)` | `automation.effective_lines` escalado por el mismo tope |
+| `in_reference`  | por commit: se toma la referencia **más reciente cuyo `included_shas` incluye el commit** y su `surviving_lines` se reparte entre los commits incluidos en proporción a sus líneas `committed` (tope: las del commit) | ídem con `surviving_effective_lines` |
+| `deployed`      | por commit: máx(reparto de la referencia `kind=deployment` que lo incluye, líneas `committed` del commit si hay Deployment `success` a producción de su SHA o del `merge_sha`/`head_sha` de un PR cuya rama origen lo contiene) | ídem con líneas efectivas |
 
 Tasas:
 
 ```
 conversion(etapa)   = lines(etapa) / lines(etapa anterior)      (null en generated o si el anterior es 0)
+conversion(deployed)= lines(deployed) / lines(committed)        (un despliegue puede llegar por el merge del PR sin tag)
 Tasa de aceptación  = lines(accepted)  / lines(generated)       = funnel[accepted].conversion
 Retención en Git    = lines(committed) / lines(accepted)        = funnel[committed].conversion
 Supervivencia       = lines(in_reference) / lines(accepted)     (se calcula multiplicando las conversiones
@@ -40,14 +44,15 @@ Las tasas de aceptación por **cambios** (no por líneas) salen de `counts`: `ch
 
 Reglas de honestidad:
 
-- `deployed` exige evidencia real: `reference.marked` con `kind = deployment` y `evidence_url` (el contrato rechaza el evento si falta), o un Deployment `success` recibido por webhook. Una rama `main`, un merge o un tag sin evidencia **nunca** cuentan como desplegados; como mucho son "versión de referencia (demo)".
-- `in_reference` usa la última referencia de cada sesión, no la suma de todas (marcar dos tags no duplica las líneas).
+- **Embudo monótono**: ninguna etapa supera a la anterior. `committed` se topa por lo aceptado (hashes repetidos como `return null;` o cambios aceptados fuera de la ventana podrían inflarlo), `in_reference` y `deployed` se reparten sobre las líneas `committed` de cada commit, y `generated` nunca es menor que lo aceptado.
+- `deployed` exige evidencia real: `reference.marked` con `kind = deployment` y `evidence_url` (el contrato rechaza el evento si falta), o un Deployment `success` recibido por webhook **en un entorno de producción** (`DEPLOY_PRODUCTION_ENVIRONMENTS`, por defecto `production,prod`; `staging` no cuenta). Vale el SHA del commit o el merge commit / head del PR cuya rama origen (`Commit.branch` o `remote_branch`) contiene el commit. Una rama `main`, un merge o un tag sin evidencia **nunca** cuentan como desplegados; como mucho son "versión de referencia (demo)".
+- `in_reference` solo cuenta líneas de commits presentes en `included_shas` del tag; si un commit está en varios tags manda el más reciente (marcar dos tags no duplica las líneas).
 
 ## Fuente y procedencia
 
 | etapa          | fuente (`source`)                 | procedencia típica |
 |----------------|-----------------------------------|--------------------|
-| `generated`    | `ide-telemetry`                   | `real` (conteo de eventos del IDE) |
+| `generated`    | `ide-telemetry`                   | `estimated` (las triviales propuestas se estiman; `real` solo si todo se aceptó tal cual) |
 | `accepted`     | `ide-telemetry`                   | `real` en `lines`; `estimated` en `effective_lines` |
 | `committed`    | `git-local` o `git-remote`        | `estimated` (coincidencia por hash de línea) |
 | `in_reference` | `declared-reference`              | `estimated` (diff simplificado contra el SHA del tag) |
@@ -75,24 +80,27 @@ Sesión `demo-001`, tarea `MAG-123`, rama `feature/MAG-123-descuentos`, `tokens.
 
 | etapa          | lines | effective_lines | conversion          | tokens / 100 líneas | tokens / 100 efectivas |
 |----------------|------:|----------------:|---------------------|--------------------:|-----------------------:|
-| `generated`    |   134 |            null | null                |            7 104.48 |                   null |
-| `accepted`     |    64 |           30.64 | 64/134 = 0.4776     |           14 875.00 |              31 070.50 |
-| `committed`    |    43 |           27.44 | 43/64 = 0.6719      |           22 139.53 |              34 693.88 |
+| `generated`    |   100 |            null | null                |            9 520.00 |                   null |
+| `accepted`     |    48 |           30.64 | 48/100 = 0.48       |           19 833.33 |              31 070.50 |
+| `committed`    |    43 |           27.44 | 43/48 = 0.8958      |           22 139.53 |              34 693.88 |
 | `in_reference` |    41 |           25.44 | 41/43 = 0.9535      |           23 219.51 |              37 421.38 |
-| `deployed`     |     0 |               0 | 0/41 = 0            |                null |                   null |
+| `deployed`     |     0 |               0 | 0/43 = 0            |                null |                   null |
 
-- `generated = 42 + 35 + 35 + 22 = 134`: `chg-1`, `chg-2` (rechazado), `chg-3` (regeneración rechazada) y `chg-4`.
+- `accepted = (42 − 10) + (22 − 6) = 32 + 16 = 48` líneas no triviales.
+- `generated = 32 + 16 + 26 + 26 = 100` (`estimated`): `chg-1` y `chg-4` se aceptaron tal cual (exactas); `chg-2` y `chg-3` (35 propuestas cada uno, rechazados) se estiman con la proporción trivial de lo aceptado en la sesión, `16 / 64 = 0.25`: `round(35 × 0.75) = 26`.
 - Aceptación por cambios: `counts.changes_accepted / counts.changes_proposed = 2 / 4 = 0.50`.
-- Supervivencia: `41 / 64 = 0.6406`.
+- Supervivencia: `41 / 48 = 0.8542`.
 - `deployed = 0`: el tag `demo-v0.1` es una referencia de demo, no hay evidencia de despliegue. Por eso tokens / 100 líneas es `null` y no infinito.
 
-Lectura: la retención aparente (0.67) está subestimada por la diferencia de unidades (ver límites): de las 47 líneas IA no triviales aceptadas, 43 llegaron al commit (0.91).
+Lectura: de las 48 líneas IA no triviales aceptadas, 43 llegaron al commit (0.90) y 41 sobreviven en la versión de referencia.
 
 ## Errores comunes / límites
 
-- **Unidades distintas entre etapas.** `generated` y `accepted` cuentan todas las líneas agregadas no vacías (incluidas las triviales como `}`); `committed`, `in_reference` y `deployed` cuentan hashes únicos de líneas **no triviales** (así lo calcula `matchCommit` y `computeSurvival`). La retención en Git y la supervivencia salen, por tanto, sesgadas hacia abajo en la proporción de triviales del cambio (25 % en el ejemplo). Para comparar etapas, usar `effective_lines` (las triviales pesan 0 y no sufren el sesgo).
-- `deployed` por webhook solo casa si el SHA desplegado es el **mismo** SHA del commit de la sesión (comparación por prefijo). Un despliegue del commit de merge o de un squash no se detecta como despliegue de esas líneas; en ese caso se debe emitir `reference.marked` con `kind = deployment`, `evidence_url` y las líneas sobrevivientes en el SHA desplegado.
-- `counts.deployments_success` cuenta solo los Deployment `success` cuyo SHA coincide con un commit del alcance; el mismo criterio que la etapa `deployed`.
+- `generated` es una estimación: `code.proposed` solo trae `files[].added` (sin clasificar por `kind`), así que las triviales de lo rechazado se suponen en la misma proporción que lo aceptado de la sesión.
+- `accepted` cuenta líneas no triviales (con repeticiones dentro del cambio); `committed` cuenta hashes únicos. Una línea repetida intencionalmente se cuenta una vez en Git: la conversión `committed` puede quedar algo por debajo de 1 aunque todo llegara.
+- El tope de `committed` usa solo cambios aceptados **del alcance**: un commit de la ventana cuyos cambios se aceptaron antes de `from` aporta 0 líneas (la nota lo indica).
+- El despliegue por merge commit se reconoce por la rama origen del PR, no por ancestros reales del merge: un commit que se agregó a la rama después del merge contaría igual (`estimated`).
+- `counts.deployments_success` cuenta los Deployment `success` a producción que prueban el despliegue de algún commit del alcance; el mismo criterio que la etapa `deployed`.
 - Los cambios aceptados que se descartan por completo antes del commit no suman `ai_lost_lines`; solo se ven como diferencia entre `accepted` y `committed`.
 - Un commit con líneas IA de varias sesiones se atribuye a la sesión del evento `git.committed`.
 - La etapa `generated` no pondera nada: es volumen bruto de propuestas.
@@ -100,5 +108,6 @@ Lectura: la retención aparente (0.67) está subestimada por la diferencia de un
 ## Implementación
 
 - Esquema: `packages/contracts/src/summary.ts` (`FunnelStage`, `FunnelStep`), `packages/contracts/src/events.ts` (eventos de cada etapa).
-- Cálculo: `apps/api/src/modules/productivity/productivity.metrics.ts` (`stageLines`, `buildFunnel`, `deployedCommits`, `highestStage`).
+- Cálculo: `apps/api/src/modules/productivity/productivity.metrics.ts` (`acceptedNonTrivial`, `generatedNonTrivial`, `committedLinesByCommit`, `referenceLinesByCommit`, `stageLines`, `buildFunnel`, `deployedCommits`, `highestStage`).
+- Regla de despliegue (compartida con tareas): `apps/api/src/common/utils/deployment-evidence.ts`.
 - Coincidencia por hash: `packages/metrics/src/commit.ts` (`matchCommit`, `computeSurvival`).

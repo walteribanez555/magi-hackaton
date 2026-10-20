@@ -129,17 +129,18 @@ rework:   big = clamp01((ln 43 − ln 41) / 1.5) = 0.0317
 
 Ambos con [criticidad](criticidad.md) `low`, `provenance = estimated`.
 
-Nota sobre la etiqueta real: si se entrenara con esta sesión, `chg-1` tendría `rework = 1`, porque `chg-4` borró 4 líneas de `src/pricing/discounts.ts` 36 minutos después. Ver límites.
+Nota sobre la etiqueta real: `chg-4` borró 4 líneas de `src/pricing/discounts.ts` 36 minutos después de `chg-1`, pero en la **misma sesión**: es iteración, no retrabajo. Con la regla actual `chg-1` queda `rework = 0` (pasados los 14 días sin otra señal). Sí sería `rework = 1` si `5a6b7c8` ("ajustes de revisión", al día siguiente) se hubiera hecho con MagiCode desde otra sesión o ≥ 24 h después y reescribiera líneas del mismo archivo.
 
 ## Errores comunes / límites
 
 - Leer las puntuaciones como verdad: son probabilidades con AUC ≈ 0.70, y hoy entrenadas con datos sintéticos (`simulated`).
-- La etiqueta `rework` cuenta como retrabajo cualquier borrado posterior en el mismo archivo, incluida la iteración normal dentro de la misma sesión (como `chg-1` → `chg-4`). Esto infla la tasa de retrabajo real hasta que se excluyan los cambios de la misma sesión o se use una señal explícita (`lines_rewritten_14d`, campo propuesto).
+- La etiqueta `rework` (datos reales, `ml/labels.py`) cuenta un cambio posterior solo si viene de **otra sesión** o llega **≥ 24 h** después, toca el mismo archivo reescribiendo o borrando líneas (`files[].deleted > 0` en la misma ruta) y cae dentro de los 14 días; o si una tarea Bug enlazada toca los mismos archivos. La iteración dentro de la sesión no es retrabajo. Los cambios de humanos sin MagiCode no se ven (no hay evento): la señal explícita `lines_rewritten_14d` (propuesta) lo resolvería.
+- `survival` no usa ningún estado `deployed` (no existe en `ChangeListItem.status`): cuenta `in_reference`, `in_reference_at`/`deployed_at`/`reference_tags`, `included_shas` de una Reference o un Deployment `success` a producción del commit o del merge commit de su PR.
 - `session_acceptance_rate` depende del momento: el primer cambio de una sesión tiene 1.0 o 0 según se acepte, lo que lo vuelve ruidoso en sesiones cortas.
 - `hour_of_day` es UTC: `late_night` no refleja la hora local del desarrollador.
 - `branch_is_default` compara contra `main/master/develop/trunk` salvo que se informe la rama default real.
 - `top_factors` del XGBoost es una aproximación (gain × desviación de la mediana), no una atribución SHAP por predicción. `large_untested_core` puede aparecer como factor aunque no es una columna de `SCORING_FEATURES`.
-- El contexto (`tokens_total`, `regenerations`, `latency_ms`, `session_acceptance_rate`, `task_type`) lo debe aportar quien invoca el scoring; si falta, esas features valen 0 y sesgan las puntuaciones (con `session_acceptance_rate = 0`, `acceptance_centered = −0.6`).
+- El contexto lo arma la ingesta (`scoringContextFor`, espejo de `ml/export_dataset.py`): `tokens_total` = usage de la petición + su cadena `regenerates`, `regenerations` = largo de la cadena, `latency_ms` de la petición, `session_acceptance_rate` = aceptados / propuestos de la sesión hasta el cambio inclusive (0.6 si no hay datos) y `task_type` = `type` de la Task. Si la petición aún no llegó, `tokens_total` vale 0.
 
 ## Implementación
 
@@ -147,4 +148,4 @@ Nota sobre la etiqueta real: si se entrenara con esta sesión, `chg-1` tendría 
 - Features y etiquetas: `ml/features.py`, `ml/features.json` (generado desde contracts por `scripts/export-scoring-features.mjs`), `ml/labels.py`, `ml/export_dataset.py`.
 - Heurística: `ml/heuristic.py`, `ml/heuristic_weights.json` (copiado a `apps/api/src/modules/scoring/heuristic-weights.json`).
 - Entrenamiento y despliegue: `ml/train.py`, `ml/generate_synthetic.py`, `ml/model/{survival,rework}/` (`metrics.json`, `model_card.md`); documentación en `ml/README.md`.
-- API: `apps/api/src/modules/scoring/scoring.service.ts` (`createScoringService`, `topFactors`, `criticalityFrom`, `onChangeAccepted`), `scoring.features.ts` (`buildFeatures`, `toCsvRow`), `scoring.heuristic.ts`, `heuristic-weights.json`, `feature-importance.json`. Enganche con la ingesta: `onChangeAccepted` en `apps/api/src/modules/productivity/productivity.service.ts` (hoy es un stub `TODO(scoring)`: hasta cablearlo, `ChangeListItem.scores` llega `null`).
+- API: `apps/api/src/modules/scoring/scoring.service.ts` (`createScoringService`, `topFactors`, `criticalityFrom`, `onChangeAccepted`), `scoring.features.ts` (`buildFeatures`, `toCsvRow`), `scoring.heuristic.ts`, `heuristic-weights.json`, `feature-importance.json`. Enganche con la ingesta: `ProductivityService.scoreAccepted` en `apps/api/src/modules/productivity/productivity.service.ts` — tras escribir `code.accepted` arma el contexto, puntúa (XGBoost o `heuristic:v1` con `provenance = estimated`) y guarda `scores` en el Change con `UpdateItem` + `attribute_exists(PK)`. Los errores se registran y nunca hacen fallar la ingesta.

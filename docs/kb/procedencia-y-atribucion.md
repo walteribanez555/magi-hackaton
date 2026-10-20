@@ -42,7 +42,8 @@ Este artículo define las etiquetas; cada artículo de métrica indica cuál le 
 |-------------------------------------------|------------------------------------------|
 | `tokens.total` (vista de toda la key)     | `real`                                   |
 | `tokens.total` (vista filtrada, hora/día) | `estimated`                              |
-| `funnel[generated].lines`, `funnel[accepted].lines`        | `real`                                   |
+| `funnel[accepted].lines`                  | `real`                                   |
+| `funnel[generated].lines`                 | `estimated` (triviales de lo rechazado estimadas) |
 | `funnel[committed / in_reference / deployed].lines` | `estimated`                        |
 | todas las `effective_lines` y aristas     | `estimated`                              |
 | `ChangeScores.provenance`                 | `estimated` (modelo entrenado con datos reales) o `simulated` (sintéticos) |
@@ -68,7 +69,7 @@ Sesión `demo-001` con key dedicada y consumo por hora (ver [ejemplo completo](e
 | `tokens.unreconciled` (toda la key)    |       120 | `real`      | `magihub-usage-api`  |
 | `tokens.unreconciled` (filtro `session_id`) | 120 | `estimated` | `magihub-usage-api`  |
 | `tokens.on_mechanical`                 |  1 739.06 | `estimated` | `magihub-response`   |
-| `funnel[accepted].lines`               |        64 | `real`      | `ide-telemetry`      |
+| `funnel[accepted].lines`               |        48 | `real`      | `ide-telemetry`      |
 | `funnel[accepted].effective_lines`     |     30.64 | `estimated` | `ide-telemetry`      |
 | `funnel[committed].lines`              |        43 | `estimated` | `git-local`          |
 | `funnel[in_reference].lines`           |        41 | `estimated` | `declared-reference` |

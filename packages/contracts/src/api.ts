@@ -15,6 +15,9 @@ export const ROUTES = {
   session: '/productivity/sessions/:sessionId', // GET → SessionListItem & { changes: ChangeListItem[] }
   changes: '/productivity/changes', // GET  ?session_id | ?project_id → ChangeListItem[]
   commits: '/productivity/commits', // GET  ?repository → commits con automation
+  filters: '/productivity/filters', // GET  ?project_id → FilterOptions (repositorios, developers, autores de PR)
+  // Filtros comunes en summary/timeline/sessions/changes/commits/tasks/branches/pull-requests:
+  //   ?repository ?developer ?pr_author (además de project_id, task_key, branch, from, to)
   usage: '/usage', // GET  ?from&to&granularity → UsageResponse (cacheado en Dynamo)
   usageSync: '/usage/sync', // POST ?from&to → fuerza lectura a MagiHub y guarda snapshot
   whoami: '/whoami', // GET  → KeyIdentity (sin la key)

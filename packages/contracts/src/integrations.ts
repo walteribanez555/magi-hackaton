@@ -135,6 +135,8 @@ export const NormalizedWebhookEvent = z.discriminatedUnion('kind', [
     merge_sha: z.string().nullable(),
     head_sha: z.string(),
     url: z.string(),
+    /** login del autor del PR (GitHub user.login / Bitbucket author.nickname / GitLab user.username) */
+    author_login: z.string().optional(),
   }),
   z.object({
     ...WhBase,
@@ -191,7 +193,8 @@ export const TaskListItem = z.object({
   accepted_lines: z.number(),
   effective_lines: z.number(),
   /**
-   * algún commit de la tarea tiene un Deployment success de su SHA, o del merge_sha/head_sha de un
+   * algún commit de la tarea tiene un Deployment success A PRODUCCIÓN (DEPLOY_PRODUCTION_ENVIRONMENTS,
+   * por defecto production,prod) de su SHA, o del merge_sha/head_sha de un
    * PR cuya rama origen contiene el commit (Commit.branch / remote_branch) — misma regla que la
    * etapa `deployed` del embudo.
    */
@@ -226,6 +229,8 @@ export const PullRequestListItem = z.object({
   head_sha: z.string(),
   merge_sha: z.string().nullable(),
   url: z.string(),
+  /** autor del PR en el proveedor (filtro ?pr_author) */
+  author_login: z.string().nullable().default(null),
   opened_at: z.string().nullable(),
   merged_at: z.string().nullable(),
   closed_at: z.string().nullable(),
@@ -288,6 +293,7 @@ export const TaskDeploymentView = z.object({
   sha: z.string().nullable(),
   environment: z.string().nullable(),
   state: z.string().nullable(),
+  /** success a un entorno de producción (staging se lista pero no cuenta) */
   deployed: z.boolean(),
   url: z.string().nullable(),
 });

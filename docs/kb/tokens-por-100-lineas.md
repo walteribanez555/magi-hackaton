@@ -36,8 +36,8 @@ Sesión `demo-001`, `tokens.total = 9 520` (ver [ejemplo completo](ejemplo-demo-
 
 | etapa          | lines | tokens / 100 líneas         | effective_lines | tokens / 100 efectivas         |
 |----------------|------:|-----------------------------|----------------:|--------------------------------|
-| `generated`    |   134 | 9 520 / 134 × 100 = 7 104.48 |            null | null                           |
-| `accepted`     |    64 | 9 520 / 64 × 100 = 14 875.00 |           30.64 | 9 520 / 30.64 × 100 = 31 070.50 |
+| `generated`    |   100 | 9 520 / 100 × 100 = 9 520.00 |            null | null                           |
+| `accepted`     |    48 | 9 520 / 48 × 100 = 19 833.33 |           30.64 | 9 520 / 30.64 × 100 = 31 070.50 |
 | `committed`    |    43 | 22 139.53                    |           27.44 | 34 693.88                      |
 | `in_reference` |    41 | 23 219.51                    |           25.44 | 37 421.38                      |
 | `deployed`     |     0 | null                         |               0 | null                           |
@@ -47,7 +47,7 @@ Respuesta a la pregunta del reto para esta sesión: **9 520 tokens de MagiHub pr
 ## Errores comunes / límites
 
 - Dividir por los tokens de peticiones aceptadas (`on_accepted`) en lugar de `total` subestima el costo: oculta la exploración y los errores.
-- En etapas desde `committed`, `lines` excluye triviales y cuenta hashes únicos (ver [embudo](embudo.md)): el salto de `accepted` a `committed` en tokens / 100 líneas está inflado por esa diferencia. Tokens / 100 líneas efectivas no tiene ese sesgo.
+- Todas las etapas cuentan líneas no triviales (ver [embudo](embudo.md)); en `generated` las triviales de lo rechazado se estiman (`estimated`). `accepted` cuenta repeticiones y `committed` hashes únicos: queda un sesgo pequeño entre ambas que tokens / 100 líneas efectivas no tiene.
 - Con pocas líneas el valor es muy volátil: 1 línea más o menos mueve mucho el resultado. Agregar por proyecto o por semana antes de sacar conclusiones.
 - Si `tokens.total` sale del respaldo (`reported_by_requests`), el KPI hereda `estimated`.
 

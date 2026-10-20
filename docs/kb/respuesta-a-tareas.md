@@ -129,7 +129,7 @@ Acción manual equivalente desde el dashboard (comentario con métricas de la ta
 ```json
 POST /api/v1/tasks/MAG-123/actions
 {
-  "action": { "kind": "comment", "body_markdown": "Sesión demo-001: 9 400 tokens MagiHub, 30.64 líneas efectivas (estimadas)." },
+  "action": { "kind": "comment", "body_markdown": "Sesión demo-001: 9 520 tokens MagiHub, 30.64 líneas efectivas (estimadas)." },
   "idempotency_key": "ui-7c2f9a10"
 }
 ```

@@ -25,7 +25,7 @@ export const FunnelStep = z.object({
   /** (tokens_total / lines) × 100; null si lines = 0 */
   tokens_per_100_lines: Measured,
   tokens_per_100_effective_lines: Measured,
-  /** lines(etapa) / lines(etapa anterior) */
+  /** lines(etapa) / lines(etapa anterior); deployed / committed (puede desplegarse sin tag) */
   conversion: Measured,
 });
 export type FunnelStep = z.infer<typeof FunnelStep>;
@@ -87,6 +87,10 @@ export const SummaryScope = z.object({
   session_id: z.string().optional(),
   task_key: z.string().optional(),
   branch: z.string().optional(),
+  /** developer (email de git) — filtra sesiones/cambios/commits del IDE */
+  developer: z.string().optional(),
+  /** login del autor del PR en el proveedor — filtra PRs y lo enlazado a ellos (ramas, commits, tareas) */
+  pr_author: z.string().optional(),
   from: z.string(),
   to: z.string(),
 });
@@ -191,3 +195,11 @@ export const ChangeListItem = z.object({
   occurred_at: z.string(),
 });
 export type ChangeListItem = z.infer<typeof ChangeListItem>;
+
+/** GET /productivity/filters?project_id — opciones para los filtros del dashboard. */
+export const FilterOptions = z.object({
+  repositories: z.array(z.string()),
+  developers: z.array(z.object({ id: z.string(), name: z.string().nullable(), sessions: z.number() })),
+  pr_authors: z.array(z.object({ login: z.string(), pull_requests: z.number() })),
+});
+export type FilterOptions = z.infer<typeof FilterOptions>;

@@ -76,7 +76,7 @@ beforeEach(() => {
   store.put({ ...keys.branch(T, 'acme/shop', 'feature/mag-123-login'), ...keys.branchGsi1(T, 'shop', '2026-10-20T11:00:00.000Z'), repository: 'acme/shop', branch: 'feature/mag-123-login', task_keys: new Set(['MAG-123', 'MAG-777']), session_ids: new Set(['s1']), commit_shas: new Set(['a'.repeat(40), 'b'.repeat(40)]), last_activity_at: '2026-10-20T11:00:00.000Z' });
   store.put({ ...keys.pullRequest(T, 'acme/shop', 42), repository: 'acme/shop', number: 42, state: 'merged', source_branch: 'feature/mag-123-login', target_branch: 'main', head_sha: 'b'.repeat(40), merge_sha: 'c'.repeat(40), url: 'https://github.com/acme/shop/pull/42', task_keys: ['MAG-123'] });
   // se desplegó el MERGE commit del PR #42 (no el SHA del commit de la sesión)
-  store.put({ ...keys.deployment(T, 'acme/shop', '2'), entity: 'Deployment', repository: 'acme/shop', deployment_id: '2', sha: 'c'.repeat(40), state: 'success' });
+  store.put({ ...keys.deployment(T, 'acme/shop', '2'), entity: 'Deployment', repository: 'acme/shop', deployment_id: '2', sha: 'c'.repeat(40), state: 'success', environment: 'production' });
 });
 
 describe('aggregateTaskMetrics', () => {
@@ -178,6 +178,14 @@ describe('TaskListItem.deployed — misma regla que el embudo', () => {
     store.put({ ...store.getSync(keys.deployment(T, 'acme/shop', '2'))!, sha: 'd'.repeat(40) });
     const t = (await svc.list(T, { project_id: 'shop' })).find((x) => x.task_key === 'MAG-123')!;
     expect(t.deployed).toBe(false);
+  });
+
+  it('success a staging se lista en el detalle pero no cuenta como desplegado', async () => {
+    store.put({ ...store.getSync(keys.deployment(T, 'acme/shop', '2'))!, environment: 'staging' });
+    link('MAG-123', 'deployment', 'acme/shop:3', { deployment_id: '3', repository: 'acme/shop', state: 'success', deployed: true, environment: 'staging' });
+    const d = await svc.detail(T, 'MAG-123');
+    expect(d.deployed).toBe(false);
+    expect(d.linked.deployments.find((x) => x.deployment_id === '3')).toMatchObject({ state: 'success', deployed: false, environment: 'staging' });
   });
 
   it('deployment failure del merge commit no cuenta', async () => {

@@ -14,8 +14,8 @@ Los **tokens** son el costo de inferencia que MagiHub mide para una API key en u
 | `reported_by_requests`       | Σ `usage.total_tokens` devuelto en cada respuesta de Smart Auto (`ai.request.completed.payload.usage`). |
 | `unreconciled`               | `total − reported_by_requests`.                                                             |
 | `on_accepted`                | Σ tokens de las peticiones con ≥ 1 cambio aceptado (estado `accepted`, `committed` o `in_reference`). |
-| `on_rejected`                | Σ tokens de las peticiones **sin** cambio aceptado: rechazos, errores, cancelaciones, exploración. |
-| `on_redundant_regenerations` | Σ tokens de las peticiones cuyo `output_hash` repite el de una petición **anterior** de la misma sesión. |
+| `on_rejected`                | Σ tokens de las peticiones **sin** cambio aceptado que **no** son regeneración redundante: rechazos, errores, cancelaciones, exploración. |
+| `on_redundant_regenerations` | Σ tokens de las peticiones **no aceptadas** cuyo `output_hash` repite el de una petición **anterior** de la misma sesión. |
 | `on_mechanical`              | `on_accepted × mechanical_share` (tokens proporcionales a líneas automatizables sin LLM).   |
 | `cost_usd`                   | Σ `cost_usd` de los registros de consumo, solo si MagiHub lo expone y la vista es de toda la key; si no, `null`. |
 
@@ -24,7 +24,7 @@ Cálculo de `total` según el alcance y la granularidad del consumo:
 | caso                                                        | `total`                                                             | procedencia |
 |-------------------------------------------------------------|---------------------------------------------------------------------|-------------|
 | Vista de toda la key (sin filtros)                          | Σ `usage.total_tokens` de todos los registros de la ventana         | `real`      |
-| Vista filtrada, granularidad `request`                      | Σ de los registros cuyo `request_id` pertenece a las peticiones del alcance | `real` |
+| Vista filtrada, granularidad `request`                      | Σ de los registros cuyo `request_id` pertenece a las peticiones del alcance; las peticiones aún sin registro (retraso de ingesta) suman su `usage` reportado | `real` (`estimated` si hubo que completar) |
 | Vista filtrada, granularidad `hour`/`day`                   | por ventana: `tokens_ventana × (reportado_alcance / reportado_key)`, redondeado | `estimated` |
 | Sin API de consumo o sin registros en la ventana con peticiones reportadas | `reported_by_requests` (con nota)                     | `estimated` |
 
@@ -33,16 +33,20 @@ Tokens de cada petición: si hay un registro de consumo con su `request_id` (gra
 Relaciones:
 
 ```
-on_accepted + on_rejected = Σ tokens por petición        (partición por resultado)
-on_redundant_regenerations ⊂ (on_accepted ∪ on_rejected)  (vista transversal, no se suma)
+on_accepted + on_redundant_regenerations + on_rejected = Σ tokens por petición   (PARTICIÓN)
+Σ tokens por petición + unreconciled ≈ total
 on_mechanical ⊂ on_accepted                               (vista transversal, no se suma)
 ```
 
+Cada petición cae en un solo grupo, por prioridad: con cambio aceptado → `on_accepted`; si no, con `output_hash` repetido → `on_redundant_regenerations`; el resto → `on_rejected`. `dimensions.redundancy.redundant_regenerations` sigue contando **todas** las peticiones con `output_hash` repetido (aceptadas o no).
+
+**Regla única de imputación** (`allocateUsage` en `productivity.metrics.ts`): el `total` del resumen, `SessionListItem.tokens` y `TaskListItem.tokens` usan la misma tabla de arriba con el alcance de cada uno (las peticiones de la sesión, de la tarea o del filtro). Por eso una sesión en una key con consumo por hora sale `estimated` (prorrateada) aunque cada respuesta haya reportado su `usage`, y con el mock sale `simulated`.
+
 Otros lugares donde aparecen tokens:
 
-- `SessionListItem.tokens`: Σ tokens de las peticiones de la sesión.
+- `SessionListItem.tokens`: API de consumo imputada a las peticiones de la sesión (regla única de arriba).
 - `ChangeListItem.tokens`: tokens de su petición; si una petición produjo `n` cambios, se reparten `tokens / n` (con nota).
-- `TaskListItem.tokens`: tokens de las sesiones enlazadas a la tarea.
+- `TaskListItem.tokens`: API de consumo (snapshots guardados de cada key) imputada a las peticiones de las sesiones enlazadas que son de la tarea o no tienen tarea; sin snapshots, Σ reportado `estimated`. Ver [tareas y ramas](tareas-y-ramas.md).
 - `by_model[].tokens`: Σ tokens por modelo que eligió Smart Auto (`model` del evento; `unknown` si no se expone).
 - `TimelinePoint.tokens`: por bucket de hora/día; en vista de toda la key sale de los registros de consumo, si no, de las peticiones.
 
@@ -81,20 +85,20 @@ reported_by_requests       = 2 400 + 1 800 + 1 700 + 2 900 + 600 = 9 400
 total (API de consumo)     = 9 520
 unreconciled               = 9 520 − 9 400 = 120
 on_accepted                = 2 400 + 2 900 = 5 300
-on_rejected                = 1 800 + 1 700 + 600 = 4 100      (5 300 + 4 100 = 9 400 ✓)
-on_redundant_regenerations = 1 700                              (req-103)
+on_redundant_regenerations = 1 700                              (req-103, no aceptada)
+on_rejected                = 1 800 + 600 = 2 400                (5 300 + 1 700 + 2 400 = 9 400 ✓)
 on_mechanical              = 5 300 × 0.328125 = 1 739.0625 ≈ 1 739
 cost_usd                   = null
 ```
 
 Vista de toda la key: `total = 9 520` es `real`. Vista filtrada por `session_id = demo-001`: como la granularidad es `hour`, el total se prorratea; al ser la única sesión que usó la key, el reparto es 9 520 × (9 400 / 9 400) = 9 520, pero la procedencia pasa a `estimated`. En ambas vistas la [atribución](procedencia-y-atribucion.md) es `estimated`, porque el consumo no trae granularidad `request`.
 
-Lectura: el 43 % de los tokens (4 100 / 9 520) fue exploración o desperdicio; 1 700 tokens se gastaron en una regeneración idéntica.
+Lectura: el 43 % de los tokens ((2 400 + 1 700) / 9 520) fue exploración o desperdicio, de los cuales 1 700 se gastaron en una regeneración idéntica. `SessionListItem.tokens` de `demo-001` = 9 520 `estimated` (mismo prorrateo que el resumen).
 
 ## Errores comunes / límites
 
 - No usar `reported_by_requests` como total: el reto exige el dato de MagiHub. Solo se usa como respaldo, marcado `estimated`.
-- `on_accepted` y `on_rejected` suman el total por petición, no `total`: la diferencia es `unreconciled`.
+- `on_accepted + on_redundant_regenerations + on_rejected` suman el total por petición, no `total`: la diferencia es `unreconciled`.
 - `on_redundant_regenerations` solo marca coincidencias exactas de `output_hash` (salida normalizada idéntica), no salidas "casi" iguales.
 - El prorrateo por hora/día asume que el reparto del consumo dentro de cada ventana es proporcional al `usage` reportado.
 - `cost_usd` por alcance filtrado no está disponible: MagiHub lo reporta por key.
@@ -102,5 +106,5 @@ Lectura: el 43 % de los tokens (4 100 / 9 520) fue exploración o desperdicio; 1
 ## Implementación
 
 - Esquema: `packages/contracts/src/summary.ts` (`TokenBreakdown`), `packages/contracts/src/magihub.ts` (`UsageRecord`, `UsageResponse`), `packages/contracts/src/events.ts` (`TokenUsage`, `AiRequestCompleted`).
-- Cálculo: `apps/api/src/modules/productivity/productivity.metrics.ts` (`computeTokens`, `resolveRequestTokens`, `redundantRegenerations`).
+- Cálculo: `apps/api/src/modules/productivity/productivity.metrics.ts` (`allocateUsage`, `computeTokens`, `resolveRequestTokens`, `redundantRegenerations`); tareas: `apps/api/src/modules/tasks/tasks.service.ts` (`allocateTaskTokens`).
 - Lectura de consumo: `apps/api/src/modules/magihub/magihub.client.ts`, `apps/api/src/modules/usage/`.

@@ -523,9 +523,15 @@ function stageLines(input: MetricsInput): StageLines[] {
   return [generated, acc, committed, inRef, deployed];
 }
 
+/**
+ * conversion = lines(etapa) / lines(etapa anterior), salvo `deployed`, que se compara con
+ * `committed`: un despliegue puede venir directo del merge de un PR sin tag de referencia, así que
+ * in_reference no es su antecesor obligado (deployed ≤ committed por construcción).
+ */
 function buildFunnel(stages: StageLines[], total: Measured): FunnelStep[] {
+  const committedStage = stages.find((x) => x.stage === 'committed');
   return stages.map((s, i) => {
-    const prev = i > 0 ? stages[i - 1] : undefined;
+    const prev = s.stage === 'deployed' ? committedStage : i > 0 ? stages[i - 1] : undefined;
     const lines = s.lines.value ?? 0;
     const eff = s.effective.value;
     const tokProv = worst(total.provenance, s.lines.provenance);

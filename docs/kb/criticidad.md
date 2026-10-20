@@ -77,7 +77,8 @@ El mismo cambio en una Story a las 15:00 UTC, con 90 líneas, 1 regeneración y 
 ## Errores comunes / límites
 
 - No es severidad de un bug ni impacto en negocio: es "probabilidad de retrabajo × exposición".
-- Hereda los límites de la etiqueta de retrabajo (incluye la iteración normal en la misma sesión) y de los datos de entrenamiento (hoy sintéticos).
+- Hereda los límites de la etiqueta de retrabajo y de los datos de entrenamiento (hoy sintéticos). La etiqueta real ya no cuenta la iteración dentro de la misma sesión (ver [puntuaciones](puntuaciones-xgboost.md)).
+- Se calcula al ingerir `code.accepted` y se guarda en el Change; un cambio aceptado antes de existir el scoring, o cuyo scoring falló, muestra `scores = null` (sin criticidad).
 - El tier se infiere por ruta: un archivo crítico fuera de `src/` (p. ej. `scripts/billing.ts`) igualmente es `core`, pero uno en `docs/` con código ejecutable pesa 0.3.
 - El contrato describe la criticidad como "rework_risk × importancia × tier del archivo"; la fórmula implementada es la media geométrica ponderada de arriba (con exposición = media de importancia y peso de tier). Este artículo documenta la implementada.
 

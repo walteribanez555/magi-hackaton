@@ -18,12 +18,12 @@ Las cifras afectadas por estas limitaciones se publican como `estimated` (o `sim
 |---|------------|--------|-------------|
 | 1 | Coincidencia por hash de línea normalizada | Líneas movidas, renombradas o reformateadas más allá de espacios no casan (subestima commit/supervivencia); líneas genéricas (`return null;`) pueden casar de más. | `committed`, `in_reference`, `ai_share`, `existing_in_repo` |
 | 2 | Clasificación de `kind` por regex, sin parser y sin estado entre líneas | Imports multilínea y comentarios de bloque pueden clasificarse como `logic`. | importancia, líneas efectivas, mecánicas |
-| 3 | Unidades distintas entre etapas: `accepted` cuenta líneas con triviales; `committed`/`in_reference` cuentan hashes únicos no triviales | Retención en Git y supervivencia sesgadas a la baja (≈ proporción de triviales). `lost_before_commit` mezcla ambas unidades. | `funnel[].conversion`, `lost_before_commit` |
+| 3 | Todas las etapas cuentan líneas no triviales, pero `generated` estima las triviales de lo rechazado (proporción de lo aceptado en la sesión) y `accepted` cuenta repeticiones mientras Git cuenta hashes únicos | `generated` es `estimated` (cota superior si la sesión no aceptó nada); la retención puede quedar levemente bajo 1 aunque todo llegue. `committed` se topa por lo aceptado del alcance. | `funnel[].lines`, `funnel[].conversion` |
 | 4 | Tier por ruta | Un archivo crítico con ruta atípica puede pesar como `docs` o `core` erróneamente. | importancia, criticidad |
 | 5 | Atribución `estimated` si MagiHub no da consumo por petición | Tokens por sesión/cambio/tarea son repartos proporcionales. | `tokens.total` filtrado, `attribution` |
 | 6 | `unreconciled` | Si otra app usa la key, el total incluye consumo ajeno. Usar key dedicada. | `tokens.unreconciled` |
-| 7 | "Desplegado" solo con evidencia; el embudo exige el mismo SHA del commit de la sesión | Despliegues del merge commit o de un squash no suman líneas en `deployed` (aunque la tarea marque `deployed = true`). | `funnel[deployed]`, `TaskListItem.deployed` |
-| 8 | `in_reference` usa la última referencia por sesión | Referencias más antiguas de la sesión no se muestran en el embudo. | `funnel[in_reference]` |
+| 7 | "Desplegado" solo con evidencia a producción: SHA del commit o merge/head del PR de su rama (`DEPLOY_PRODUCTION_ENVIRONMENTS`) | Un squash a otra rama sin PR registrado, o un despliegue a un entorno no listado, no cuentan. Embudo y tarea usan la misma regla. | `funnel[deployed]`, `TaskListItem.deployed` |
+| 8 | `in_reference` solo cuenta commits en `included_shas`; por commit manda el tag más reciente que lo incluye | Si el IDE no informa `included_shas`, la etapa queda en 0; tags anteriores del mismo commit no se suman. | `funnel[in_reference]` |
 | 9 | Cruce PR ↔ commits por rama y SHA, sin recorrer ancestros | Rebase, cherry-pick o squash pueden romper el cruce. | `PullRequestListItem.ai` |
 | 10 | Horas de PR = horas de recepción del webhook | El lead time derivado es aproximado y puede salir corto si la integración se configuró con el PR abierto. | lead time |
 | 11 | Puntuaciones entrenadas con datos sintéticos | `ChangeScores.provenance = simulated` con XGBoost; la heurística es `estimated`. AUC ≈ 0.70. | `scores` |
@@ -37,7 +37,7 @@ Las cifras afectadas por estas limitaciones se publican como `estimated` (o `sim
 
 ## Ejemplo
 
-En la sesión `demo-001` (ver [ejemplo completo](ejemplo-demo-001.md)) la retención en Git aparente es `43 / 64 = 0.6719`, pero de las 47 líneas IA no triviales aceptadas llegaron 43 (`0.9149`): la diferencia es la limitación 3. Los 120 tokens no reconciliados son la limitación 6 (una llamada con `curl` usando la misma key).
+En la sesión `demo-001` (ver [ejemplo completo](ejemplo-demo-001.md)) la retención en Git es `43 / 48 = 0.8958`: de las 48 líneas no triviales aceptadas (47 hashes únicos, la guarda repetida cuenta una vez en Git) llegaron 43; la diferencia entre 48 y 47 es la limitación 3. Los 120 tokens no reconciliados son la limitación 6 (una llamada con `curl` usando la misma key).
 
 ## Errores comunes / límites
 

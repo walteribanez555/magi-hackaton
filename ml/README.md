@@ -63,17 +63,21 @@ con un test de paridad numérica (mismo ítem → mismo vector y mismo score heu
 ## 3. Etiquetas con datos reales (`labels.py`, `export_dataset.py`)
 
 `export_dataset.py` hace un **Scan paginado de DynamoDB** (`TABLE_NAME`) filtrado por `entity`
-(`Change`, `AiRequest`, `Commit`, `Reference`, `Deployment`, `Task`, `TaskLink`, `Session`).
+(`Change`, `AiRequest`, `Commit`, `Reference`, `Deployment`, `PullRequest`, `Task`, `TaskLink`, `Session`).
 Se eligió Dynamo y no la réplica RDS porque el Processing Job corre fuera de la VPC (sin NAT) y
 la RDS es privada; para tablas grandes conviene `ExportTableToPointInTime` a S3 (mismos ítems).
 
-- **survival = 1** si el Change está `in_reference` (o trae `in_reference_at` / `deployed_at` /
-  `reference_tags`), o su `commit_sha` está en `included_shas` de una Reference o en un
-  Deployment `success`. **= 0** si pasaron 14 días sin llegar.
+- **survival = 1** si el Change está `in_reference` (no existe un estado `deployed` en
+  `ChangeListItem`), o trae `in_reference_at` / `deployed_at` / `reference_tags`, o su
+  `commit_sha` está en `included_shas` de una Reference o tiene evidencia de despliegue: Deployment
+  `success` **a producción** (`DEPLOY_PRODUCTION_ENVIRONMENTS`, por defecto `production,prod`) de
+  su SHA o del `merge_sha`/`head_sha` de un PR cuya rama origen contiene el commit
+  (`deployed_commit_shas`, misma regla que la API). **= 0** si pasaron 14 días sin llegar.
 - **rework = 1** si hay señal explícita (`lines_rewritten_14d > 0`, ver propuestas), o un cambio
-  aceptado posterior (≤ 14 días, mismo repo) **borra líneas en los mismos archivos**, o una tarea
-  **Bug** creada en esa ventana está enlazada (TaskLink `commit`) a commits que tocan esos archivos.
-  **= 0** si pasaron 14 días sin señal.
+  aceptado posterior (≤ 14 días, mismo repo) que **viene de otra sesión o llega ≥ 24 h después**
+  y **reescribe/borra líneas en los mismos archivos**, o una tarea **Bug** creada en esa ventana
+  está enlazada (TaskLink `commit`) a commits que tocan esos archivos. La iteración dentro de la
+  misma sesión (aceptar y ajustar al rato) **no** es retrabajo. **= 0** si pasaron 14 días sin señal.
 - Filas dentro de la ventana sin señal positiva = **censuradas** (se excluyen; contarlas como 0
   sesgaría ambos modelos).
 - El split es estratificado **y agrupado por sesión** (`StratifiedGroupKFold`): las features de

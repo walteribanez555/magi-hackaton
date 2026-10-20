@@ -50,7 +50,7 @@ API de consumo: una ventana 14:00–15:00 con `total_tokens = 9 520` y `requests
 
 ```
 reported_by_requests = 9 400        total = 9 520        unreconciled = 120
-on_accepted = 5 300   on_rejected = 4 100   on_redundant_regenerations = 1 700
+on_accepted = 5 300   on_redundant_regenerations = 1 700   on_rejected = 2 400   (partición: 5 300 + 1 700 + 2 400 = 9 400)
 on_mechanical = 5 300 × 0.328125 = 1 739.0625
 ```
 
@@ -67,7 +67,7 @@ on_mechanical = 5 300 × 0.328125 = 1 739.0625
 | chg-4  |    12.10 |     0.5500 |           16 | 2 (0 / 2 / 0)                   |     0.1250 |         7 |           0.3182 |     10.00 |
 | sesión |    35.13 |     0.5489 |           48 | 5 (1 / 2 / 2)                   |     0.1042 |        21 |           0.3281 |     30.64 |
 
-Hashes únicos no triviales aceptados: 31 (chg-1, la guarda repetida cuenta una vez) + 16 (chg-4) = 47.
+Líneas no triviales aceptadas (unidad del embudo): (42 − 10) + (22 − 6) = 32 + 16 = 48. Hashes únicos no triviales: 31 (chg-1, la guarda repetida cuenta una vez) + 16 (chg-4) = 47.
 
 ## Commit, PR y referencia
 
@@ -89,22 +89,22 @@ reference demo-v0.1 @ 9d8e7f6: surviving_lines = 41 · surviving_effective_lines
     "reported_by_requests":       { "value": 9400, "provenance": "real", "source": "magihub-response" },
     "unreconciled":               { "value": 120,  "provenance": "estimated", "source": "magihub-usage-api" },
     "on_accepted":                { "value": 5300, "provenance": "real", "source": "magihub-response" },
-    "on_rejected":                { "value": 4100, "provenance": "real", "source": "magihub-response" },
+    "on_rejected":                { "value": 2400, "provenance": "real", "source": "magihub-response" },
     "on_redundant_regenerations": { "value": 1700, "provenance": "real", "source": "magihub-response" },
     "on_mechanical":              { "value": 1739.0625, "provenance": "estimated", "source": "magihub-response" },
     "cost_usd":                   { "value": null, "provenance": "estimated", "source": "magihub-usage-api" }
   },
   "funnel": [
-    { "stage": "generated",    "lines": 134, "effective_lines": null,  "tokens_per_100_lines": 7104.4776,  "tokens_per_100_effective_lines": null,       "conversion": null },
-    { "stage": "accepted",     "lines": 64,  "effective_lines": 30.64, "tokens_per_100_lines": 14875,      "tokens_per_100_effective_lines": 31070.4961, "conversion": 0.4776 },
-    { "stage": "committed",    "lines": 43,  "effective_lines": 27.44, "tokens_per_100_lines": 22139.5349, "tokens_per_100_effective_lines": 34693.8776, "conversion": 0.6719 },
+    { "stage": "generated",    "lines": 100, "effective_lines": null,  "tokens_per_100_lines": 9520,       "tokens_per_100_effective_lines": null,       "conversion": null },
+    { "stage": "accepted",     "lines": 48,  "effective_lines": 30.64, "tokens_per_100_lines": 19833.3333, "tokens_per_100_effective_lines": 31070.4961, "conversion": 0.48 },
+    { "stage": "committed",    "lines": 43,  "effective_lines": 27.44, "tokens_per_100_lines": 22139.5349, "tokens_per_100_effective_lines": 34693.8776, "conversion": 0.8958 },
     { "stage": "in_reference", "lines": 41,  "effective_lines": 25.44, "tokens_per_100_lines": 23219.5122, "tokens_per_100_effective_lines": 37421.3836, "conversion": 0.9535 },
     { "stage": "deployed",     "lines": 0,   "effective_lines": 0,     "tokens_per_100_lines": null,       "tokens_per_100_effective_lines": null,       "conversion": 0 }
   ],
   "dimensions": {
     "importance": { "score": 0.5489, "by_kind": { "logic": 23, "declaration": 6, "test": 8, "config": 3, "comment": 3, "import": 5, "trivial": 16 } },
     "redundancy": { "score": 0.1042, "intra_change": 1, "existing_in_repo": 2, "repeated_in_session": 2, "redundant_regenerations": 1 },
-    "automation": { "ai_share_of_commits": 0.7818, "mechanical_share": 0.3281, "lost_before_commit": 0.0625, "accepted_as_is": 61, "edited_before_accept": 3 }
+    "automation": { "ai_share_of_commits": 0.7818, "mechanical_share": 0.3281, "lost_before_commit": 0.0833, "accepted_as_is": 61, "edited_before_accept": 3 }
   },
   "counts": {
     "sessions": 1, "ai_requests": 5, "changes_proposed": 4, "changes_accepted": 2, "changes_rejected": 2,
@@ -113,6 +113,8 @@ reference demo-v0.1 @ 9d8e7f6: surviving_lines = 41 · surviving_effective_lines
   }
 }
 ```
+
+Notas: `generated = 100` es `estimated` (32 + 16 exactas de los aceptados; `chg-2` y `chg-3` = `round(35 × (1 − 16/64)) = 26` cada uno). `deployed.conversion` se calcula contra `committed` (0 / 43). `lost_before_commit = 4 / 48`.
 
 (En el JSON real cada valor del embudo y de las aristas es un `Measured` `{value, provenance, source, note?}`; aquí se muestra solo `value` para abreviar. En la vista de toda la key, sin `session_id`, `tokens.total` sería `real`.)
 
@@ -127,11 +129,13 @@ reference demo-v0.1 @ 9d8e7f6: surviving_lines = 41 · surviving_effective_lines
 
 ## Tarea (`TaskListItem`)
 
-`MAG-123`: `status = Done`, `branches = [feature/MAG-123-descuentos]`, `sessions = 1`, `commits = 3`, `pull_requests = [{14, merged}]`, `tokens = {9400, estimated}`, `accepted_lines = 64`, `effective_lines = 30.64`, `deployed = false`.
+`MAG-123`: `status = Done`, `branches = [feature/MAG-123-descuentos]`, `sessions = 1`, `commits = 3`, `pull_requests = [{14, merged}]`, `tokens = {9520, estimated}` (snapshot por hora prorrateado, misma regla que el resumen; sin snapshots guardados sería el respaldo `{9400, estimated}`), `accepted_lines = 48`, `effective_lines = 30.64`, `deployed = false` (no hay Deployment `success` a producción del commit ni del merge commit `9d8e7f6`).
+
+Sesión (`SessionListItem`): `tokens = {9520, estimated, magihub-usage-api}` (prorrateo de la ventana horaria), `accepted_lines = 48`, `effective_lines = 30.64`, `highest_stage = in_reference`.
 
 ## Respuesta a la pregunta del reto
 
-**En la sesión demo-001 se consumieron 9 520 tokens de MagiHub (dato real de la API de consumo, 120 no reconciliados). Produjeron 64 líneas aceptadas; 43 líneas IA llegaron al commit `3f9c2e1` y 41 sobreviven en la versión de referencia (demo) `demo-v0.1`, equivalentes a 25.44 líneas efectivas: 37 421 tokens por cada 100 líneas efectivas en la versión de referencia. No hay evidencia de despliegue, así que no se reporta la etapa "desplegado".**
+**En la sesión demo-001 se consumieron 9 520 tokens de MagiHub (dato real de la API de consumo, 120 no reconciliados). Produjeron 48 líneas no triviales aceptadas; 43 líneas IA llegaron al commit `3f9c2e1` y 41 sobreviven en la versión de referencia (demo) `demo-v0.1`, equivalentes a 25.44 líneas efectivas: 37 421 tokens por cada 100 líneas efectivas en la versión de referencia. No hay evidencia de despliegue, así que no se reporta la etapa "desplegado".**
 
 ## Artículos que usan este ejemplo
 

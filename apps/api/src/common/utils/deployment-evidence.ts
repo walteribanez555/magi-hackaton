@@ -1,6 +1,10 @@
+import { config } from '../../config/config';
+
 /**
  * Regla ÚNICA de "desplegado" (etapa `deployed` del embudo y TaskListItem.deployed).
- * Un commit cuenta como desplegado si existe un Deployment `success` del mismo repositorio cuyo SHA:
+ * Un commit cuenta como desplegado si existe un Deployment `success` a un entorno de PRODUCCIÓN
+ * (DEPLOY_PRODUCTION_ENVIRONMENTS, por defecto "production,prod"; staging u otros no cuentan,
+ * sin entorno tampoco) del mismo repositorio cuyo SHA:
  *   1. es el SHA del commit, o
  *   2. es el merge_sha / head_sha de un PullRequest cuya rama origen contiene el commit
  *      (Commit.branch o Commit.remote_branch = PR.source_branch) — desplegar el merge commit cuenta.
@@ -26,8 +30,16 @@ export interface DeployEvidenceRef {
   repository: string;
   sha: string;
   state?: string;
+  environment?: string | null;
   deployment_id?: string;
 }
+
+/** Entornos de producción configurados (minúsculas). */
+export const productionEnvironments = (): string[] => config.getValue('deployments').productionEnvironments;
+
+/** ¿El entorno cuenta como producción? */
+export const isProductionEnvironment = (env: string | null | undefined, envs: string[] = productionEnvironments()): boolean =>
+  !!env && envs.includes(env.trim().toLowerCase());
 
 /** Comparación de SHAs por prefijo (≥ 7 caracteres). */
 export const shaPrefixEq = (a: string | null | undefined, b: string | null | undefined): boolean => {
@@ -53,12 +65,21 @@ export function deployableShas(commit: DeployCommitRef, prs: DeployPrRef[]): str
 }
 
 /** Deployments success que prueban el despliegue del commit (vacío ⇒ no desplegado). */
-export function deploymentsOfCommit(commit: DeployCommitRef, deployments: DeployEvidenceRef[], prs: DeployPrRef[]): DeployEvidenceRef[] {
+export function deploymentsOfCommit(
+  commit: DeployCommitRef,
+  deployments: DeployEvidenceRef[],
+  prs: DeployPrRef[],
+  envs: string[] = productionEnvironments(),
+): DeployEvidenceRef[] {
   const shas = deployableShas(commit, prs);
   return deployments.filter(
-    (d) => d.state === 'success' && sameRepository(d.repository, commit.repository) && shas.some((s) => shaPrefixEq(s, d.sha)),
+    (d) =>
+      d.state === 'success' &&
+      isProductionEnvironment(d.environment, envs) &&
+      sameRepository(d.repository, commit.repository) &&
+      shas.some((s) => shaPrefixEq(s, d.sha)),
   );
 }
 
-export const isCommitDeployed = (commit: DeployCommitRef, deployments: DeployEvidenceRef[], prs: DeployPrRef[]): boolean =>
-  deploymentsOfCommit(commit, deployments, prs).length > 0;
+export const isCommitDeployed = (commit: DeployCommitRef, deployments: DeployEvidenceRef[], prs: DeployPrRef[], envs?: string[]): boolean =>
+  deploymentsOfCommit(commit, deployments, prs, envs).length > 0;

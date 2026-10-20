@@ -35,6 +35,9 @@ Supuestos generativos (documentados; los coeficientes viven en heuristic_weights
   - rework: ↑ core + logic + editado (código que importa → se toca de nuevo), ↑ tamaño, y
     sobre todo ↑ "grande y sin tests en core"; ↑ tarea Bug; ↑ redundancia; ↓ mecánico;
     ↓ tests; ↑ nocturno. z = h_rework(x) − 0.30·s + N(0, 0.6)
+    (No simula la regla de archivos de labels.py — otra sesión o ≥ 24 h, mismo archivo, ≤ 14 días —
+    sino la probabilidad que esa etiqueta real busca medir; la iteración dentro de la sesión ya
+    no es retrabajo en las etiquetas reales.)
   - Ruido de etiqueta: se invierte el 5 % de las etiquetas (configurable con --label-noise).
 
 Uso:

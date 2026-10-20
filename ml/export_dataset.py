@@ -16,6 +16,8 @@ Entidades usadas (ver packages/contracts/src/keys.ts):
   Commit      → commit_sha del cambio (change_ids) + paths para enlazar tareas Bug
   Reference   → included_shas / sha (etiqueta survival)
   Deployment  → sha con state=success (etiqueta survival)
+  PullRequest → merge_sha/head_sha + source_branch: desplegar el merge commit del PR cuenta para
+                los commits de su rama (Commit.branch / remote_branch), igual que la API
   Task        → type (Bug) + fechas;  TaskLink(kind=commit) → commits de la tarea
 
 Etiquetas: ver labels.py (ventana 14 días; filas censuradas se excluyen).
@@ -45,8 +47,38 @@ from labels import parse_ts, rework_label, survival_label
 
 log = logging.getLogger(__name__)
 
-ENTITIES = ['Change', 'Session', 'AiRequest', 'Commit', 'Reference', 'Deployment', 'Task', 'TaskLink']
-ACCEPTED_STATUSES = {'accepted', 'committed', 'in_reference', 'deployed'}
+ENTITIES = ['Change', 'Session', 'AiRequest', 'Commit', 'Reference', 'Deployment', 'PullRequest', 'Task', 'TaskLink']
+ACCEPTED_STATUSES = {'accepted', 'committed', 'in_reference'}
+
+
+def _sha_eq(a: Any, b: Any) -> bool:
+    x, y = str(a or '').lower(), str(b or '').lower()
+    return len(x) >= 7 and len(y) >= 7 and (x.startswith(y) or y.startswith(x))
+
+
+def deployed_commit_shas(commits: List[Mapping[str, Any]], deployments: List[Mapping[str, Any]],
+                         pull_requests: List[Mapping[str, Any]]) -> set:
+    """
+    SHAs de commits con evidencia de despliegue (misma regla que la API,
+    apps/api/src/common/utils/deployment-evidence.ts): Deployment success del mismo repo cuyo
+    SHA es el del commit o el merge_sha/head_sha de un PR cuya rama origen contiene el commit,
+    y SOLO a entornos de producción (DEPLOY_PRODUCTION_ENVIRONMENTS, por defecto production,prod).
+    """
+    prod = {e.strip().lower() for e in os.getenv('DEPLOY_PRODUCTION_ENVIRONMENTS', 'production,prod').split(',') if e.strip()}
+    ok = [d for d in deployments if d.get('state') == 'success' and d.get('sha')
+          and str(d.get('environment') or '').strip().lower() in prod]
+    out = set()
+    for c in commits:
+        repo = str(c.get('repository') or '').lower()
+        branches = {b for b in (c.get('branch'), c.get('remote_branch')) if b}
+        shas = [c.get('sha')]
+        for pr in pull_requests:
+            if str(pr.get('repository') or '').lower() == repo and pr.get('source_branch') in branches:
+                shas += [pr.get('merge_sha'), pr.get('head_sha')]
+        if any(str(d.get('repository') or '').lower() == repo and any(_sha_eq(s, d['sha']) for s in shas if s)
+               for d in ok):
+            out.add(c.get('sha'))
+    return out
 
 
 def _plain(v: Any) -> Any:
@@ -105,7 +137,8 @@ def build_dataset(items: Mapping[str, List[dict]], now: Optional[datetime] = Non
         reference_shas.update(r.get('included_shas') or [])
         if r.get('sha'):
             reference_shas.add(r['sha'])
-    deployed_shas = {d.get('sha') for d in items.get('Deployment', []) if d.get('state') == 'success' and d.get('sha')}
+    deployments = items.get('Deployment', [])
+    deployed_shas = deployed_commit_shas(list(commits.values()), deployments, items.get('PullRequest', []))
 
     tasks = {}
     for t in items.get('Task', []):

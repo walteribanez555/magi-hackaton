@@ -10,11 +10,13 @@ Los **pull requests** (PR) son la etapa de revisión e integración entre el com
 
 | dónde                                          | qué cuenta                                                                                         |
 |------------------------------------------------|-----------------------------------------------------------------------------------------------------|
-| `ProductivitySummary.counts.pull_requests`     | PR del proyecto (o del `repository` filtrado) con **actividad** en la ventana `from`–`to` (último evento recibido en la ventana). |
+| `ProductivitySummary.counts.pull_requests`     | PR del proyecto con **actividad** en la ventana `from`–`to` (último evento recibido en la ventana). Con `?repository` solo ese repo; con `?task_key` solo los PR enlazados a la tarea (`PR.task_keys`, por título/rama); con `?branch` solo los que salen de esa rama (`source_branch`). |
 | `ProductivitySummary.counts.pull_requests_merged` | de esos, los que están en estado `merged`.                                                       |
-| `GET /api/v1/pull-requests` → `meta.total`     | todos los PR conocidos del proyecto/repositorio, sin ventana de tiempo.                             |
+| `GET /api/v1/pull-requests` → `meta.total`     | **histórico**: todos los PR conocidos del proyecto/repositorio, sin ventana de tiempo (`meta` es `PullRequestTotals`). |
 | `meta.open`, `meta.merged`, `meta.closed`      | por estado; se calculan **antes** de aplicar el filtro `?state=`.                                   |
 | `TaskListItem.pull_requests[]`                 | PR enlazados a la tarea (`number`, `state`, `url`).                                                 |
+
+Regla para no confundirlos: `counts.pull_requests` responde "¿cuántos PR se movieron en esta ventana?" y `meta.total` "¿cuántos PR tiene el proyecto?". Un PR abierto hace un mes sin eventos nuevos cuenta en `meta.total` pero no en `counts.pull_requests` de esta semana. Ambos están documentados en los comentarios de `packages/contracts/src/summary.ts` (`counts.pull_requests`) e `integrations.ts` (`PullRequestTotals`).
 
 Estado (`state`):
 
@@ -50,7 +52,7 @@ Los commits que llegaron solo por webhook (el IDE nunca los reportó) tienen `au
 - `meta.with_ai_lines / meta.total`: adopción de MagiCode en los PR del proyecto.
 - % IA del PR > 0.70: el PR es mayoritariamente IA; conviene cruzarlo con la [criticidad](criticidad.md) de sus cambios antes de aprobarlo.
 - `counts.pull_requests_merged / counts.pull_requests` bajo con mucha actividad: PR que se abren y quedan sin integrar (o se cierran sin fusionar).
-- Un PR `merged` no es "desplegado": solo una evidencia de despliegue lleva a la etapa `deployed`.
+- Un PR `merged` no es "desplegado": solo una evidencia de despliegue lleva a la etapa `deployed`. Pero si se despliega a producción su **merge commit** (o su head), los commits de su rama origen cuentan como desplegados (ver [embudo](embudo.md)).
 - Lead time creciente en PR con alto % IA puede indicar que la revisión del código generado es costosa.
 
 ## Ejemplo
@@ -84,7 +86,7 @@ Nota: las 2 líneas IA que se reescribieron en `5a6b7c8` no se ven en el bloque 
 
 ## Implementación
 
-- Contrato del evento: `packages/contracts/src/integrations.ts` (`repo.pull_request` en `NormalizedWebhookEvent`); conteos en `packages/contracts/src/summary.ts` (`counts.pull_requests`, `counts.pull_requests_merged`). `PullRequestListItem` y `PullRequestTotals` están propuestos en `apps/api/src/modules/pull-requests/pull-requests.types.ts` (aún no en contracts).
+- Contrato del evento: `packages/contracts/src/integrations.ts` (`repo.pull_request` en `NormalizedWebhookEvent`); conteos en `packages/contracts/src/summary.ts` (`counts.pull_requests`, `counts.pull_requests_merged`). `PullRequestListItem` y `PullRequestTotals` (schemas zod) en `packages/contracts/src/integrations.ts`.
 - Proyección del webhook: `apps/api/src/modules/webhooks/webhooks.projection.ts` (`pullRequest`).
 - Listado y cruce con commits: `apps/api/src/modules/pull-requests/pull-requests.service.ts` (`prCommits`, `toPullRequestListItem`, `totalsOf`).
-- Conteos del resumen: `apps/api/src/modules/productivity/productivity.service.ts` (`externalCounts`).
+- Conteos del resumen: `apps/api/src/modules/productivity/productivity.service.ts` (`externalCounts`, `filterPullRequests`).

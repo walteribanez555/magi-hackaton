@@ -37,7 +37,8 @@ En el resumen (`ProductivitySummary.dimensions.automation`):
 ```
 mechanical_share     = Σ mechanical_lines / Σ lines                 (cambios aceptados)
 ai_share_of_commits  = Σ ai_matched_lines / Σ commit_added_lines    (commits del alcance)
-lost_before_commit   = Σ ai_lost_lines / líneas IA aceptadas
+lost_before_commit   = Σ ai_lost_lines / Σ (importance.lines − by_kind.trivial) de los cambios aceptados commiteados
+                       (misma unidad: líneas no triviales; ver metrics-model §2.5)
 accepted_as_is, edited_before_accept = sumas
 ```
 
@@ -92,6 +93,8 @@ ai_share = 43 / 55 = 0.7818
 ```
 
 Lectura: el 78 % del commit (sin contar llaves) vino de la IA; el humano aportó 12 líneas y descartó 4 de las aceptadas (3 de lógica de `chg-1` y 1 comentario de `chg-4`).
+
+`lost_before_commit = 4 / (32 + 16) = 4 / 48 = 0.0833` (no triviales aceptadas: `42 − 10` y `22 − 6`). El denominador cuenta la guarda repetida de `chg-1` dos veces (no son hashes únicos), por eso es 48 y no 47.
 
 ## Errores comunes / límites
 

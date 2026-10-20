@@ -63,13 +63,13 @@ effective_lines = 23.03 − 0.39 − 2.00 = 20.64
 
 | etapa          | líneas | líneas efectivas | densidad |
 |----------------|-------:|-----------------:|---------:|
-| `accepted`     |     64 |            30.64 |     0.48 |
+| `accepted`     |     48 |            30.64 |   0.6383 |
 | `committed`    |     43 |            27.44 |        – |
 | `in_reference` |     41 |            25.44 |        – |
 
 De `accepted` a `committed` se pierden 4 líneas IA no triviales (3 de lógica de peso 1.0 y 1 comentario de 0.2): `30.64 − 3.20 = 27.44`. En la revisión del PR #14 se reescriben 2 líneas de lógica más: `27.44 − 2.00 = 25.44` en el tag `demo-v0.1`.
 
-La densidad solo se calcula en `accepted` porque las líneas de `committed` e `in_reference` excluyen triviales (ver límites).
+La densidad (`effective_lines / lines`) se muestra en `accepted`, sobre líneas no triviales como todo el [embudo](embudo.md): `30.64 / 48 = 0.6383`.
 
 ## Errores comunes / límites
 

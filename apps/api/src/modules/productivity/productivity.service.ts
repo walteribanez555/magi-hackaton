@@ -144,6 +144,22 @@ export function scopeTaskKeys(
   return out;
 }
 
+type PrRow = { repository?: string; state?: string; source_branch?: string; task_keys?: string[] };
+
+/**
+ * PRs de counts.pull_requests: con ?repository solo ese repo; con ?task_key solo los enlazados a
+ * la tarea (PR.task_keys = título/rama, lo mismo que escribe TaskLink kind=pr); con ?branch solo
+ * los que salen de esa rama (source_branch).
+ */
+export function filterPullRequests<T extends PrRow>(prs: T[], q: Pick<ProductivityQuery, 'repository' | 'task_key' | 'branch'>): T[] {
+  return prs.filter(
+    (pr) =>
+      (!q.repository || pr.repository === q.repository) &&
+      (!q.task_key || (pr.task_keys ?? []).includes(q.task_key)) &&
+      (!q.branch || pr.source_branch === q.branch),
+  );
+}
+
 export interface ProductivityDeps {
   scoring?: ScoringService;
   fireTrigger?: FireTrigger;
@@ -475,9 +491,10 @@ export class ProductivityService {
    * acotado a la ventana. tasks_done: las que tienen Task con status_category = done.
    */
   private async externalCounts(t: string, q: ProductivityQuery, data: ScopeData) {
-    const prs = (await mapLimit(data.projectIds, 4, (p) =>
-      this.repo.listProjectGsi<{ repository?: string; state?: string }>(t, p, 'PR#', q.from, q.to).catch(() => []),
-    )).flat().filter((pr) => !q.repository || pr.repository === q.repository);
+    const prs = filterPullRequests(
+      (await mapLimit(data.projectIds, 4, (p) => this.repo.listProjectGsi<PrRow>(t, p, 'PR#', q.from, q.to).catch(() => []))).flat(),
+      q,
+    );
     type TaskRow = { task_key?: string; status_category?: string; deleted?: boolean };
     const fromJira = (await mapLimit(data.projectIds, 4, (p) => this.repo.listProjectGsi<TaskRow>(t, p, 'TASK#', q.from, q.to).catch(() => [])))
       .flat()

@@ -213,7 +213,7 @@ describe('etapa desplegado', () => {
   it('Deployment success del webhook para el SHA del commit ⇒ desplegado', () => {
     const base = scenario();
     const sha = base.commits[0]!.sha;
-    const s = computeSummary({ ...base, deployments: [{ repository: 'org/repo', sha, state: 'success', deployment_id: 'd1' }] });
+    const s = computeSummary({ ...base, deployments: [{ repository: 'org/repo', sha, state: 'success', environment: 'production', deployment_id: 'd1' }] });
     expect(s.funnel[4]!.lines.value).toBe(18);
     expect(s.counts.deployments_success).toBe(1);
     const failed = computeSummary({ ...base, deployments: [{ repository: 'org/repo', sha, state: 'failure', deployment_id: 'd2' }] });
@@ -345,16 +345,16 @@ describe('desplegado por merge commit del PR', () => {
     });
 
   it('Deployment success del merge_sha de un PR cuya rama contiene el commit ⇒ desplegado', () => {
-    const s = computeSummary({ ...base(), deployments: [{ repository: 'org/repo', sha: MERGE.slice(0, 12), state: 'success', deployment_id: 'd9' }] });
+    const s = computeSummary({ ...base(), deployments: [{ repository: 'org/repo', sha: MERGE.slice(0, 12), state: 'success', environment: 'production', deployment_id: 'd9' }] });
     expect(s.funnel[4]!.lines.value).toBe(18);
     expect(s.counts.deployments_success).toBe(1);
-    const items = computeSessionItems({ ...base(), deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success', deployment_id: 'd9' }] });
+    const items = computeSessionItems({ ...base(), deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success', environment: 'production', deployment_id: 'd9' }] });
     expect(items[0]!.highest_stage).toBe('deployed');
   });
 
   it('PR de otra rama o deployment fallido ⇒ no desplegado', () => {
     const other = { ...base(), pullRequests: [{ repository: 'org/repo', source_branch: 'feature/otra', merge_sha: MERGE }] };
-    expect(computeSummary({ ...other, deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success' }] }).funnel[4]!.lines.value).toBe(0);
+    expect(computeSummary({ ...other, deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success', environment: 'production' }] }).funnel[4]!.lines.value).toBe(0);
     expect(computeSummary({ ...base(), deployments: [{ repository: 'org/repo', sha: MERGE, state: 'failure' }] }).funnel[4]!.lines.value).toBe(0);
   });
 
@@ -363,7 +363,7 @@ describe('desplegado por merge commit del PR', () => {
     const s = computeSummary({
       ...b,
       commits: [commit(SHA1, ['c1'], 18, { remote_branch: 'feature/MAG-1-x' })],
-      deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success' }],
+      deployments: [{ repository: 'org/repo', sha: MERGE, state: 'success', environment: 'production' }],
     });
     expect(s.funnel[4]!.lines.value).toBe(18);
   });
@@ -419,5 +419,19 @@ describe('embudo monótono: ninguna etapa supera a la anterior', () => {
     const s = computeSummary(input({ changes: [accepted('c1', 'r1', 20, { proposed_added_lines: 12, d: { trivial: 4 } })] }));
     expect(s.funnel[0]!.lines.value).toBe(16);
     expect(s.funnel[1]!.lines.value).toBe(16);
+  });
+});
+
+describe('desplegado: solo entornos de producción; conversión respecto de committed', () => {
+  it('staging success NO cuenta; production sí; deployed.conversion = deployed / committed', () => {
+    const base = scenario();
+    const sha = base.commits[0]!.sha;
+    const staging = computeSummary({ ...base, deployments: [{ repository: 'org/repo', sha, state: 'success', environment: 'staging', deployment_id: 's1' }] });
+    expect(staging.funnel[4]!.lines.value).toBe(0);
+    expect(staging.counts.deployments_success).toBe(0);
+    const prod = computeSummary({ ...base, deployments: [{ repository: 'org/repo', sha, state: 'success', environment: 'Production', deployment_id: 'p1' }] });
+    expect(prod.funnel[4]!.lines.value).toBe(18);
+    // in_reference = 15 pero el despliegue (18) se compara con committed (18) ⇒ 1, nunca > 100 %
+    expect(prod.funnel[4]!.conversion.value).toBe(1);
   });
 });

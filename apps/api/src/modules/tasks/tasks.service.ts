@@ -2,7 +2,7 @@ import { TaskKey, type Criticality, type Provenance, type TaskListItem } from '@
 import { config } from '../../config/config';
 import { createLogger } from '../../config/logger';
 import { BadRequestException, NotFoundException } from '../../common/exceptions';
-import { isCommitDeployed, type DeployEvidenceRef, type DeployPrRef } from '../../common/utils/deployment-evidence';
+import { isCommitDeployed, isProductionEnvironment, type DeployEvidenceRef, type DeployPrRef } from '../../common/utils/deployment-evidence';
 import { DAY_MS, iso } from '../../common/utils/time';
 import { acceptedNonTrivial, allocateUsage, worst } from '../productivity/productivity.metrics';
 import { productivityRepository } from '../productivity/productivity.repository';
@@ -205,7 +205,12 @@ export class TasksService {
       let p = cache.get(repo);
       if (!p) {
         p = Promise.all([this.repo.deploymentsOf(tenantId, repo), this.prRepo.byRepository(tenantId, repo)]).then(([deps, prs]) => ({
-          deployments: deps.map((d) => ({ repository: String(d.repository ?? repo), sha: String(d.sha ?? ''), state: s(d.state) ?? undefined })),
+          deployments: deps.map((d) => ({
+            repository: String(d.repository ?? repo),
+            sha: String(d.sha ?? ''),
+            state: s(d.state) ?? undefined,
+            environment: s(d.environment),
+          })),
           prs: prs as DeployPrRef[],
         }));
         cache.set(repo, p);
@@ -334,7 +339,8 @@ export class TasksService {
       sha: s(l.sha),
       environment: s(l.environment),
       state: s(l.state),
-      deployed: l.deployed === true || l.state === 'success',
+      // se listan todos los entornos; solo producción cuenta como desplegado
+      deployed: (l.deployed === true || l.state === 'success') && isProductionEnvironment(s(l.environment)),
       url: s(l.url),
     }));
 

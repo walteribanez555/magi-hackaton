@@ -7,7 +7,7 @@ import { keys } from '@magicode/contracts';
 import { config } from '../../../config/config';
 import { resetDynamo } from '../../../config/dynamo';
 import { createScoringService } from '../../scoring';
-import { ProductivityService, scopeTaskKeys, scoringContextFor } from '../productivity.service';
+import { filterPullRequests, ProductivityService, scopeTaskKeys, scoringContextFor } from '../productivity.service';
 import { eventTaskKeys, nextChangeStatus, type TransactItem } from '../productivity.projection';
 import type { RuleTrigger } from '@magicode/contracts';
 import type { TriggerInput } from '../../task-sync/task-sync.types';
@@ -394,5 +394,19 @@ describe('counts.tasks — mismo universo que GET /tasks (Jira ∪ enlazadas)', 
   it('con filtro de sesión/repo/rama solo cuentan las enlazadas; ?task_key la acota', () => {
     expect([...scopeTaskKeys({ session_id: 's1' }, data, ['MAG-9'])].sort()).toEqual(['MAG-1', 'MAG-2', 'MAG-3']);
     expect([...scopeTaskKeys({ task_key: 'MAG-2' }, data, ['MAG-9'])]).toEqual(['MAG-2']);
+  });
+});
+
+describe('counts.pull_requests — filtros de tarea y rama', () => {
+  const prs = [
+    { repository: 'org/repo', source_branch: 'feature/MAG-1-a', task_keys: ['MAG-1'] },
+    { repository: 'org/repo', source_branch: 'feature/MAG-2-b', task_keys: ['MAG-2'] },
+    { repository: 'org/other', source_branch: 'feature/MAG-1-a', task_keys: ['MAG-1'] },
+  ];
+  it('?task_key solo PRs de la tarea; ?branch solo los de esa rama origen; ?repository el repo', () => {
+    expect(filterPullRequests(prs, { task_key: 'MAG-1' })).toHaveLength(2);
+    expect(filterPullRequests(prs, { task_key: 'MAG-1', repository: 'org/repo' })).toHaveLength(1);
+    expect(filterPullRequests(prs, { branch: 'feature/MAG-2-b' })).toEqual([prs[1]]);
+    expect(filterPullRequests(prs, {})).toHaveLength(3);
   });
 });

@@ -14,9 +14,9 @@ Definiciones cortas de los términos que aparecen en el dashboard y en esta guí
 | **Automatización** | Arista que separa lo mecánico (automatizable sin LLM) y mide qué parte de cada commit vino de la IA (`ai_share`). [Automatización](automatizacion.md) |
 | **`ai_share`** | `ai_matched_lines / commit_added_lines` de un commit (sin triviales). [Automatización](automatizacion.md) |
 | **Cambio** (`change`) | Una propuesta de la IA (`change_id`), con estado `proposed`, `accepted`, `rejected`, `committed` o `in_reference`. |
-| **Conversión** (`conversion`) | `lines(etapa) / lines(etapa anterior)`. [Embudo](embudo.md) |
+| **Conversión** (`conversion`) | `lines(etapa) / lines(etapa anterior)`; `deployed` se compara con `committed`. [Embudo](embudo.md) |
 | **Criticidad** | `rework_risk^0.7 × exposure^0.3`, en niveles `low`/`medium`/`high`/`critical` (umbrales 0, 0.35, 0.60, 0.80). [Criticidad](criticidad.md) |
-| **Desplegado** (`deployed`) | Etapa del embudo que exige evidencia real: `reference.marked{kind=deployment}` con `evidence_url` o Deployment `success` por webhook. [Embudo](embudo.md) |
+| **Desplegado** (`deployed`) | Etapa del embudo que exige evidencia real: `reference.marked{kind=deployment}` con `evidence_url` o Deployment `success` a producción por webhook (SHA del commit o merge commit de su PR). [Embudo](embudo.md) |
 | **Embudo** (`funnel`) | Las cinco etapas `generated → accepted → committed → in_reference → deployed`. [Embudo](embudo.md) |
 | **Exposición** (`exposure`) | `0.5 × importance_score + 0.5 × tier_weight`; modula la criticidad. [Criticidad](criticidad.md) |
 | **Generado** (`generated`) | Etapa inicial: la IA propuso líneas (`code.proposed`). No implica utilidad. |
@@ -25,7 +25,7 @@ Definiciones cortas de los términos que aparecen en el dashboard y en esta guí
 | **Integración** | Conexión de un proveedor (GitHub, Bitbucket, Jira…) con un proyecto; tiene su URL de webhook y su secreto HMAC. [Webhooks](webhooks.md) |
 | **`kind`** | Clase de línea: `logic`, `declaration`, `test`, `config`, `comment`, `import`, `trivial`. [Importancia](importancia.md) |
 | **Lead time del PR** | `merged_at − opened_at` (horas de recepción del webhook). Derivable, no es un campo. [Pull requests](pull-requests.md) |
-| **Línea** | Línea agregada no vacía. En `committed`/`in_reference`/`deployed`, hash único de línea no trivial. [Embudo](embudo.md) |
+| **Línea** | En el embudo, línea agregada no vacía y **no trivial** en todas las etapas (en `committed`/`in_reference`/`deployed`, hash único). [Embudo](embudo.md) |
 | **Líneas efectivas** | Líneas aceptadas ponderadas por importancia, sin redundantes ni mecánicas. KPI base. [Líneas efectivas](lineas-efectivas.md) |
 | **Línea mecánica** | `import`, `trivial` o en archivo `generated`: la habría producido una herramienta sin LLM. [Automatización](automatizacion.md) |
 | **`Measured`** | Valor con etiqueta: `{value, provenance, source, note?}`; `value = null` si no es calculable. [Procedencia](procedencia-y-atribucion.md) |
