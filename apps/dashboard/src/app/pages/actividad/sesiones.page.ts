@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 
 import { ProductivityService } from '@/core/data/productivity.service';
 import { ScopeService } from '@/core/data/scope.service';
+import type { SessionWithDeveloper } from '@/core/data/types';
 import { DateTimePipe, NumPipe } from '@/shared/components/ui/format.pipes';
 import { MetricComponent } from '@/shared/components/ui/metric.component';
 import { LoadingComponent, StateComponent } from '@/shared/components/ui/states.component';
@@ -28,11 +29,12 @@ import { formatDuration } from '@/shared/utils/format';
         <app-state message="No hay sesiones en este periodo." />
       } @else {
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[1040px] border-collapse text-sm">
+          <table class="w-full min-w-[1160px] border-collapse text-sm">
             <caption class="sr-only">Sesiones</caption>
             <thead>
               <tr class="border-b border-ink text-xs text-muted">
                 <th scope="col" class="py-2.5 pr-3 text-left font-medium">Sesión</th>
+                <th scope="col" class="px-3 py-2.5 text-left font-medium">Developer</th>
                 <th scope="col" class="px-3 py-2.5 text-left font-medium">Rama</th>
                 <th scope="col" class="px-3 py-2.5 text-left font-medium">Tarea</th>
                 <th scope="col" class="px-3 py-2.5 text-left font-medium">Inicio</th>
@@ -52,6 +54,7 @@ import { formatDuration } from '@/shared/utils/format';
                     <a class="font-mono text-[13px]" [routerLink]="[s.session_id]">{{ s.session_id }}</a>
                     <div class="text-xs text-muted">{{ s.repository }}</div>
                   </td>
+                  <td class="px-3 py-3" [attr.title]="devTitle(s)">{{ dev(s) }}</td>
                   <td class="px-3 py-3 font-mono text-[13px]">{{ s.branch ?? '—' }}</td>
                   <td class="px-3 py-3 font-mono text-[13px]">{{ s.task_key ?? '—' }}</td>
                   <td class="whitespace-nowrap px-3 py-3">{{ s.started_at | datetime }}</td>
@@ -80,6 +83,12 @@ export class SesionesPage {
     stream: ({ params }) => this.productivity.sessions(params),
   });
 
+  protected dev(s: SessionWithDeveloper): string {
+    return s.developer_name || s.developer || '—';
+  }
+  protected devTitle(s: SessionWithDeveloper): string | null {
+    return s.developer_name && s.developer ? s.developer : null;
+  }
   protected duration(a: string, b: string | null): string {
     return formatDuration(a, b);
   }

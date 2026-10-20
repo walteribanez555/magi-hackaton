@@ -20,6 +20,16 @@ export interface ProjectItem {
   last_activity_at: string | null;
 }
 
+/** GET /productivity/filters (contracts FilterOptions). */
+export interface FilterOptionsView {
+  repositories: string[];
+  developers: { id: string; name: string | null; sessions: number }[];
+  pr_authors: { login: string; pull_requests: number }[];
+}
+
+/** Campos de developer que el API agrega a la sesión (events.ts: developer = email de git). */
+export type SessionWithDeveloper = SessionListItem & { developer?: string | null; developer_name?: string | null };
+
 /** Commit enlazado a una tarea (contracts no define el tipo de /productivity/commits). */
 export interface TaskCommit {
   sha: string;
@@ -50,6 +60,8 @@ export interface PullRequestListItem {
   head_sha?: string | null;
   merge_sha?: string | null;
   commits_with_ai?: number | null;
+  /** autor del PR en el proveedor (filtro ?pr_author) */
+  author_login?: string | null;
   updated_at: string;
 }
 

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { TOKENS_NOTE, compact, fmt, per100 } from './format';
+import { TOKENS_NOTE, compact, developerLabel, fmt, modelLabel, per100 } from './format';
 import type { SessionState } from './session';
 
 export interface ViewModel {
@@ -10,6 +10,9 @@ export interface ViewModel {
   branch?: string;
   taskKey?: string;
   taskSource?: 'manual' | 'setting' | 'branch';
+  developer?: string;
+  developerName?: string;
+  developerSource?: 'setting' | 'git';
   pendingTelemetry: number;
   telemetryError?: string;
   busy?: string;
@@ -46,7 +49,9 @@ export class StatusBar implements vscode.Disposable {
     md.appendMarkdown(`**MagiCode** · sesión \`${vm.session.id.slice(0, 8)}\`\n\n`);
     md.appendMarkdown(`$(repo) ${vm.repository ?? '—'} · $(git-branch) ${vm.branch ?? '(detached)'}`);
     md.appendMarkdown(vm.taskKey ? ` · $(tasklist) ${vm.taskKey}\n\n` : '\n\n');
+    md.appendMarkdown(`$(account) ${developerLabel(vm.developer, vm.developerName)}\n\n`);
     md.appendMarkdown(`**${fmt(st.tokens_reported)} tokens** — ${TOKENS_NOTE}\n\n`);
+    if (st.last_model) md.appendMarkdown(`$(hubot) ${modelLabel(st)}\n\n`);
     md.appendMarkdown(`${st.accepted} aceptados · ${fmt(st.accepted_lines)} líneas · ${fmt(st.effective_lines, 1)} efectivas\n\n`);
     if (vm.pendingTelemetry > 0) md.appendMarkdown(`$(cloud-upload) ${vm.pendingTelemetry} eventos pendientes de envío\n\n`);
     if (vm.telemetryError) md.appendMarkdown(`$(warning) Telemetría: ${vm.telemetryError}\n\n`);
@@ -94,11 +99,20 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<StatItem>, v
       new StatItem('Sesión', s.id.slice(0, 8), 'pulse', `Sesión ${s.id}\nDesde ${new Date(s.started_at).toLocaleString('es')}`),
       new StatItem('Repositorio', vm.repository ?? '—', 'repo', vm.repoRoot),
       new StatItem('Rama', vm.branch ?? '(detached)', 'git-branch'),
+      new StatItem(
+        'Developer',
+        vm.developer ?? vm.developerName ?? '—',
+        'account',
+        vm.developer
+          ? `${developerLabel(vm.developer, vm.developerName)} (${vm.developerSource === 'setting' ? 'ajuste magicode.developerEmail' : 'git config user.email'})`
+          : 'Sin email: configura git config user.email o el ajuste magicode.developerEmail',
+      ),
       new StatItem('Tarea', vm.taskKey ?? '—', 'tasklist', vm.taskKey ? `Tarea ${vm.taskKey} (${taskSrc})` : 'Sin tarea: usa "MagiCode: Set Task" o una rama tipo feature/MAG-123-…', {
         command: 'magicode.setTask',
         title: 'Set Task',
       }),
       new StatItem('Peticiones', `${st.requests}${st.request_errors ? ` (${st.request_errors} error)` : ''}`, 'cloud'),
+      new StatItem('Modelo', st.last_model ?? '—', 'hubot', `Modelo enrutado por Smart Auto: ${modelLabel(st)}`),
       new StatItem('Tokens reportados', fmt(st.tokens_reported), 'symbol-number', `Tokens ${TOKENS_NOTE}`),
       new StatItem('Propuestos', String(st.proposed), 'lightbulb'),
       new StatItem('Aceptados', String(st.accepted), 'check'),

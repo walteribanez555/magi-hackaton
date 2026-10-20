@@ -1,11 +1,9 @@
-import { HttpClient } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
-import type { PullRequestListItem, PullRequestTotals } from '@magicode/contracts';
-import { map } from 'rxjs';
+import type { PullRequestListItem } from '@magicode/contracts';
 
 import { ScopeService } from '@/core/data/scope.service';
-import { ApiClient, toParams } from '@/core/http/api-client';
+import { TasksService } from '@/core/data/tasks.service';
 import { NumPipe, ShaPipe } from '@/shared/components/ui/format.pipes';
 import { ProvenanceComponent } from '@/shared/components/ui/provenance.component';
 import { LoadingComponent, StateComponent } from '@/shared/components/ui/states.component';
@@ -59,12 +57,13 @@ const STATE_TONE: Record<string, Tone> = { open: 'info', merged: 'ok', closed: '
         />
       } @else {
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[960px] border-collapse text-sm">
+          <table class="w-full min-w-[1060px] border-collapse text-sm">
             <caption class="sr-only">Pull requests</caption>
             <thead>
               <tr class="border-b border-ink text-xs text-muted">
                 <th scope="col" class="py-2.5 pr-3 text-left font-medium">Número</th>
                 <th scope="col" class="px-3 py-2.5 text-left font-medium">Título / tareas</th>
+                <th scope="col" class="px-3 py-2.5 text-left font-medium">Autor</th>
                 <th scope="col" class="px-3 py-2.5 text-left font-medium">Rama origen → destino</th>
                 <th scope="col" class="px-3 py-2.5 text-left font-medium">Estado</th>
                 <th scope="col" class="px-3 py-2.5 text-left font-medium">Con líneas IA</th>
@@ -82,6 +81,7 @@ const STATE_TONE: Record<string, Tone> = { open: 'info', merged: 'ok', closed: '
                     @if (p.title) {<div>{{ p.title }}</div>}
                     <div class="font-mono text-[13px]" [class.text-muted]="!!p.title">{{ p.task_keys.length ? p.task_keys.join(', ') : '—' }}</div>
                   </td>
+                  <td class="px-3 py-3 font-mono text-[13px]">{{ p.author_login ?? '—' }}</td>
                   <td class="px-3 py-3 font-mono text-[13px]">{{ p.source_branch }} → {{ p.target_branch }}</td>
                   <td class="px-3 py-3"><app-status [tone]="tone(p.state)" [label]="stateLabel(p.state)" /></td>
                   <td class="whitespace-nowrap px-3 py-3">
@@ -104,21 +104,17 @@ const STATE_TONE: Record<string, Tone> = { open: 'info', merged: 'ok', closed: '
 })
 export class PullRequestsPage {
   protected readonly scope = inject(ScopeService);
-  private readonly http = inject(HttpClient);
-  private readonly api = inject(ApiClient);
+  private readonly tasksApi = inject(TasksService);
 
   protected readonly state = signal('');
 
   /** Se pide el cuerpo completo: `meta` trae los totales históricos (PullRequestTotals). */
   protected readonly prs = rxResource({
     params: () => {
-      const project_id = this.scope.projectId();
-      return project_id ? { project_id, state: this.state() } : undefined;
+      const q = this.scope.projectQuery();
+      return q ? { ...q, state: this.state() } : undefined;
     },
-    stream: ({ params }) =>
-      this.http
-        .get<{ data?: PrRow[]; meta?: PullRequestTotals } | PrRow[]>(this.api.url('pullRequests'), { params: toParams(params) })
-        .pipe(map((b) => (Array.isArray(b) ? { data: b, meta: null } : { data: b.data ?? [], meta: b.meta ?? null }))),
+    stream: ({ params }) => this.tasksApi.pullRequestsWithTotals<PrRow>(params),
   });
 
   protected readonly rows = computed(() => this.prs.value()?.data ?? []);

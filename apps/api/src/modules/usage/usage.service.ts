@@ -78,9 +78,10 @@ export class UsageService {
   ) {}
 
   private provenanceOf(simulated: boolean): { provenance: Provenance; source: DataSource } {
-    return config.getValue('magihub').mode === 'mock' || simulated
-      ? { provenance: 'simulated', source: 'magihub-mock' }
-      : { provenance: 'real', source: 'magihub-usage-api' };
+    const mode = config.getValue('magihub').mode;
+    if (mode === 'mock' || simulated) return { provenance: 'simulated', source: 'magihub-mock' };
+    // adaptador Bedrock: GET /v1/usage devuelve mediciones reales de Bedrock (simulated=false)
+    return mode === 'bedrock' ? { provenance: 'real', source: 'bedrock' } : { provenance: 'real', source: 'magihub-usage-api' };
   }
 
   /** Granularidad que se intentará: request salvo que MagiHub ya la haya rechazado. */

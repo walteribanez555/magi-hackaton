@@ -1,6 +1,6 @@
 import { extractTaskKeys, type NormalizedWebhookEvent } from '@magicode/contracts';
 import type { AdapterInput, AdaptResult } from '../webhooks.types';
-import { arr, base, commitRef, obj, str, toIso, ZERO_SHA } from './common';
+import { arr, authorOf, base, commitRef, obj, str, toIso, ZERO_SHA } from './common';
 
 const PR_EVENTS = new Set([
   'pullrequest:created',
@@ -103,6 +103,7 @@ export function bitbucketAdapter(input: AdapterInput): AdaptResult {
           merge_sha: state === 'merged' ? (str(obj(pr.merge_commit).hash) ?? null) : null,
           head_sha: str(obj(source.commit).hash) ?? '',
           url: str(obj(obj(pr.links).html).href) ?? '',
+          ...authorOf(str(obj(pr.author).nickname) ?? str(obj(pr.author).display_name)),
         },
       ],
     };

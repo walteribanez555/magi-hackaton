@@ -47,6 +47,10 @@ export interface SessionStats {
   effective_lines: number;
   commits: number;
   ai_committed_lines: number;
+  /** peticiones por modelo enrutado por Smart Auto (opcional: sesiones guardadas antes no lo traen) */
+  models?: Record<string, number>;
+  last_model?: string;
+  last_usage_source?: 'bedrock' | 'magihub-mock' | 'magihub-response';
 }
 
 export interface SessionState {
@@ -159,6 +163,15 @@ export function markProcessed(s: SessionState, sha: string): void {
   if (s.processed_shas.includes(sha)) return;
   s.processed_shas.push(sha);
   if (s.processed_shas.length > MAX_PROCESSED) s.processed_shas.splice(0, s.processed_shas.length - MAX_PROCESSED);
+}
+
+/** Registra el modelo enrutado (y el origen del usage) de una petición. */
+export function recordModel(st: SessionStats, model: string | undefined, usageSource?: SessionStats['last_usage_source']): void {
+  if (usageSource) st.last_usage_source = usageSource;
+  if (!model) return;
+  st.last_model = model;
+  const models = (st.models ??= {});
+  models[model] = (models[model] ?? 0) + 1;
 }
 
 export function round2(n: number): number {

@@ -58,6 +58,11 @@
           "default": "",
           "markdownDescription": "Tarea (Jira) por defecto, p. ej. `MAG-123`. Vacío = se infiere de la rama (`feature/MAG-123-…`). El comando **MagiCode: Set Task** tiene prioridad."
         },
+        "magicode.developerEmail": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Email del developer que viaja en cada evento (`developer`). Vacío = `git config user.email` del repositorio. Útil cuando Git no tiene email configurado o usas uno distinto al corporativo."
+        },
         "magicode.addSessionTrailer": {
           "type": "boolean",
           "default": true,

@@ -101,12 +101,20 @@ describe('github adapter', () => {
       merge_sha: '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432',
       head_sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
       url: 'https://github.com/acme/shop/pull/42',
+      author_login: 'anadev',
     });
   });
 
   it('pull_request opened → open y SIN merge_sha (el de prueba no cuenta)', () => {
     const ev = only(adaptWebhook('github', input('pull_request', 'github-pull_request-opened.json')), 'repo.pull_request');
-    expect(ev).toMatchObject({ state: 'open', merge_sha: null, title_task_keys: [] });
+    expect(ev).toMatchObject({ state: 'open', merge_sha: null, title_task_keys: [], author_login: 'CarlosDev' });
+  });
+
+  it('pull_request sin user → sin author_login', () => {
+    const p = fixture<Record<string, Record<string, unknown>>>('github-pull_request-opened.json');
+    const payload = { ...p, pull_request: { ...p.pull_request, user: null } };
+    const ev = only(adaptWebhook('github', { ...input('pull_request', 'github-pull_request-opened.json'), payload }), 'repo.pull_request');
+    expect(ev.author_login).toBeUndefined();
   });
 
   it('pull_request con acción no relevante → ignorado', () => {
@@ -165,7 +173,15 @@ describe('bitbucket adapter', () => {
       target_branch: 'main',
       title_task_keys: ['PAY-7'],
       url: 'https://bitbucket.org/acme/payments/pull-requests/17',
+      author_login: 'anadev',
     });
+  });
+
+  it('pullrequest sin nickname → author_login = display_name', () => {
+    const p = fixture<Record<string, Record<string, unknown>>>('bitbucket-pullrequest-fulfilled.json');
+    const payload = { ...p, pullrequest: { ...p.pullrequest, author: { display_name: 'Ana Dev' } } };
+    const ev = only(adaptWebhook('bitbucket', { ...input('pullrequest:fulfilled', 'bitbucket-pullrequest-fulfilled.json'), payload }), 'repo.pull_request');
+    expect(ev.author_login).toBe('Ana Dev');
   });
 
   it('pullrequest:rejected → closed sin merge_sha', () => {
@@ -189,7 +205,7 @@ describe('gitlab adapter', () => {
 
   it('merge_request merged', () => {
     const ev = only(adaptWebhook('gitlab', input('Merge Request Hook', 'gitlab-merge_request.json')), 'repo.pull_request');
-    expect(ev).toMatchObject({ number: 5, state: 'merged', merge_sha: '0123456789abcdef0123456789abcdef01234567', head_sha: 'da1560886d4f094c3e6c9ef40349f7d38b5d27d7' });
+    expect(ev).toMatchObject({ number: 5, state: 'merged', merge_sha: '0123456789abcdef0123456789abcdef01234567', head_sha: 'da1560886d4f094c3e6c9ef40349f7d38b5d27d7', author_login: 'jsmith' });
   });
 
   it('deployment → SHA completo desde commit_url', () => {

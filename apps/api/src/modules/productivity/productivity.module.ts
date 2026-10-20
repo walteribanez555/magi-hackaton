@@ -17,6 +17,10 @@ const Query = z.object({
   session_id: z.string().min(1).max(128).optional(),
   task_key: TaskKey.optional(),
   branch: z.string().min(1).max(256).optional(),
+  /** email de git del developer (se normaliza a minúsculas) */
+  developer: z.string().trim().min(1).max(254).transform((v) => v.toLowerCase()).optional(),
+  /** login del autor del PR en el proveedor */
+  pr_author: z.string().trim().min(1).max(100).optional(),
   from: z.string().optional(),
   to: z.string().optional(),
   bucket: z.enum(['hour', 'day']).optional(),
@@ -90,9 +94,19 @@ productivityRouter.get('/changes', async (c) => {
 });
 
 productivityRouter.get('/commits', async (c) => {
-  const repository = c.req.query('repository') || undefined;
-  const from = c.req.query('from');
-  const to = c.req.query('to');
+  const parsed = Query.safeParse(c.req.query());
+  if (!parsed.success) {
+    throw new BadRequestException('Parámetros inválidos', 'INVALID_QUERY', parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })));
+  }
+  const { from, to, project_id, repository, task_key, branch, developer, pr_author } = parsed.data;
   const win = from || to ? resolveWindow(from, to, { maxDays: 3650 }) : {};
-  return c.json({ data: await productivityService.commits(callerOf(c), { repository, ...win }) });
+  return c.json({
+    data: await productivityService.commits(callerOf(c), { project_id, repository, task_key, branch, developer, pr_author, ...win }),
+  });
+});
+
+productivityRouter.get('/filters', async (c) => {
+  const project_id = c.req.query('project_id') || undefined;
+  if (project_id && project_id.length > 128) throw new BadRequestException('project_id inválido', 'INVALID_QUERY');
+  return c.json({ data: await productivityService.filters(callerOf(c), { project_id }) });
 });

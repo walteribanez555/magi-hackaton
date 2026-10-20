@@ -296,6 +296,7 @@ describe('webhooks.service — pull requests', () => {
       state: 'merged',
       merge_sha: '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432',
       task_keys: ['MAG-123'],
+      author_login: 'anadev',
       merged_at: NOW,
       ...keys.pullRequestGsi1(TENANT, 'shop', NOW),
     });
@@ -308,9 +309,11 @@ describe('webhooks.service — pull requests', () => {
   it('un evento atrasado no "des-fusiona" el PR', async () => {
     await svc.handle(request('github', 'github-pull_request-merged.json', 'pull_request', { delivery: 'a' }));
     const p = fixture<{ pull_request: Record<string, unknown> }>('github-pull_request-merged.json');
-    const late = { ...p, action: 'synchronize', pull_request: { ...p.pull_request, state: 'open', merged: false } };
+    const late = { ...p, action: 'synchronize', pull_request: { ...p.pull_request, state: 'open', merged: false, user: null } };
     await svc.handle(request('github', late as never, 'pull_request', { delivery: 'b' }));
     expect(store.getSync(keys.pullRequest(TENANT, 'acme/shop', 42))!.state).toBe('merged');
+    // la entrega tardía sin user conserva el autor conocido
+    expect(store.getSync(keys.pullRequest(TENANT, 'acme/shop', 42))!.author_login).toBe('anadev');
   });
 
   it('opened → pr.opened con claves de la rama origen', async () => {

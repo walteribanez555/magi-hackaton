@@ -9,7 +9,8 @@
     "merge_commit_sha": "ffffeeeeddddccccbbbbaaaa9999888877776666",
     "head": { "ref": "feature/MAG-130-checkout", "sha": "1111222233334444555566667777888899990000" },
     "base": { "ref": "main", "sha": "6113728f27ae82c7b1a177c8d03f9e96e0adf246" },
-    "merged": false
+    "merged": false,
+    "user": { "login": "CarlosDev" }
   },
   "repository": { "id": 1296269, "full_name": "acme/shop" },
   "sender": { "login": "anadev", "type": "User" }

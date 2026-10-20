@@ -7,7 +7,7 @@ import { AuthService } from '@/core/auth/auth.service';
 import { SessionService } from '@/core/auth/session.service';
 import { RuntimeConfigService } from '@/core/config/runtime-config.service';
 import { PERIODS, ScopeService, type PeriodId } from '@/core/data/scope.service';
-import { ScopeMenuComponent } from '@/shared/components/ui/scope-menu.component';
+import { ScopeMenuComponent, type ScopeOption } from '@/shared/components/ui/scope-menu.component';
 import { environment } from '../../environments/environment';
 import { valueOf } from '@/shared/utils/resource';
 
@@ -50,6 +50,30 @@ interface NavItem {
               [options]="periodOptions"
               (select)="selectPeriod($event)"
             />
+            <app-scope-menu
+              label="Repositorio"
+              [value]="scope.repository() ?? ''"
+              [valueLabel]="scope.repository()"
+              placeholder="Todos"
+              [options]="repoOptions()"
+              (select)="scope.selectFilter('repository', $event)"
+            />
+            <app-scope-menu
+              label="Developer"
+              [value]="scope.developer() ?? ''"
+              [valueLabel]="developerLabel()"
+              placeholder="Todos"
+              [options]="developerOptions()"
+              (select)="scope.selectFilter('developer', $event)"
+            />
+            <app-scope-menu
+              label="Autor de PR"
+              [value]="scope.pr_author() ?? ''"
+              [valueLabel]="scope.pr_author()"
+              placeholder="Todos"
+              [options]="authorOptions()"
+              (select)="scope.selectFilter('pr_author', $event)"
+            />
             @if (identity(); as id) {
               <span class="py-2 text-muted">API key <span class="font-mono text-[13px] text-ink">{{ id.key_id }}</span></span>
             }
@@ -72,6 +96,18 @@ interface NavItem {
         <p class="m-0 border-b border-rule px-4 py-2 text-center text-[13px] text-estimated sm:px-8">
           Datos de ejemplo: el dashboard muestra fixtures locales, no datos de MagiHub.
         </p>
+      }
+
+      @if (activeFilters(); as f) {
+        <div class="border-b border-rule px-4 sm:px-8" role="status">
+          <p class="mx-auto m-0 flex max-w-[1376px] flex-wrap items-baseline gap-x-2 gap-y-1 py-2 text-[13px] text-muted">
+            <span>Filtrando por</span>
+            @for (item of f; track item.label; let last = $last) {
+              <span>{{ item.label }} <span class="font-medium text-ink">{{ item.value }}</span>@if (!last) {<span aria-hidden="true"> ·</span>}</span>
+            }
+            <button type="button" class="ml-2 cursor-pointer py-1 text-accent underline underline-offset-2 hover:text-accent-hover" (click)="scope.clearFilters()">Quitar filtros</button>
+          </p>
+        </div>
       }
 
       @if (notReady(); as n) {
@@ -142,6 +178,55 @@ export class LayoutComponent {
   protected readonly projectOptions = computed(() =>
     (valueOf(this.scope.projects) ?? []).map((p) => ({ id: p.project_id, label: p.project_id, hint: p.repositories.join(', ') })),
   );
+
+  private readonly options = computed(() => valueOf(this.scope.filterOptions) ?? null);
+
+  /** Incluye el valor activo aunque no venga en las opciones (enlace compartido). */
+  private withActive(list: ScopeOption[], active: string | null): ScopeOption[] {
+    const all = [{ id: '', label: 'Todos' }, ...list];
+    if (active && !list.some((o) => o.id === active)) all.push({ id: active, label: active });
+    return all;
+  }
+
+  protected readonly repoOptions = computed<ScopeOption[]>(() =>
+    this.withActive(
+      (this.options()?.repositories ?? this.scope.project()?.repositories ?? []).map((r) => ({ id: r, label: r })),
+      this.scope.repository(),
+    ),
+  );
+  protected readonly developerOptions = computed<ScopeOption[]>(() =>
+    this.withActive(
+      (this.options()?.developers ?? []).map((d) => ({
+        id: d.id,
+        label: d.name || d.id,
+        hint: `${d.name ? d.id + ' · ' : ''}${d.sessions} ${d.sessions === 1 ? 'sesión' : 'sesiones'}`,
+      })),
+      this.scope.developer(),
+    ),
+  );
+  protected readonly authorOptions = computed<ScopeOption[]>(() =>
+    this.withActive(
+      (this.options()?.pr_authors ?? []).map((a) => ({ id: a.login, label: a.login, hint: `${a.pull_requests} PR` })),
+      this.scope.pr_author(),
+    ),
+  );
+  protected readonly developerLabel = computed(() => {
+    const id = this.scope.developer();
+    if (!id) return null;
+    return this.options()?.developers.find((d) => d.id === id)?.name || id;
+  });
+
+  /** Filtros activos como texto plano para la franja bajo la cabecera. */
+  protected readonly activeFilters = computed(() => {
+    const items: { label: string; value: string }[] = [];
+    const repo = this.scope.repository();
+    const dev = this.developerLabel();
+    const author = this.scope.pr_author();
+    if (repo) items.push({ label: 'repositorio', value: repo });
+    if (dev) items.push({ label: 'developer', value: dev });
+    if (author) items.push({ label: 'autor de PR', value: author });
+    return items.length ? items : null;
+  });
 
   private readonly url = toSignal(
     this.router.events.pipe(

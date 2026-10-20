@@ -142,6 +142,15 @@ function reportedProvenance(r: AiRequestItem, mode: MetricsInput['magihubMode'])
   return mode === 'mock' || r.usage_source === 'magihub-mock' || r.provenance === 'simulated' ? 'simulated' : 'real';
 }
 
+/**
+ * Fuente del usage por petición: mock ⇒ magihub-mock; Bedrock (usage_source 'bedrock' o
+ * MAGIHUB_MODE=bedrock) ⇒ bedrock (tokens medidos por Bedrock, real); si no, magihub-response.
+ */
+function reportedSource(prov: Provenance, mode: MetricsInput['magihubMode'], r?: Pick<AiRequestItem, 'usage_source'>): DataSource {
+  if (prov === 'simulated') return 'magihub-mock';
+  return r?.usage_source === 'bedrock' || (mode === 'bedrock' && !r?.usage_source) ? 'bedrock' : 'magihub-response';
+}
+
 /** Resuelve los tokens de cada petición: registro exacto de usage (request_id) > usage de la respuesta. */
 export function resolveRequestTokens(input: MetricsInput): Map<string, RequestTokens> {
   const out = new Map<string, RequestTokens>();
@@ -166,14 +175,14 @@ export function resolveRequestTokens(input: MetricsInput): Map<string, RequestTo
       out.set(r.ai_request_id, {
         tokens: r.usage.total_tokens,
         provenance: prov,
-        source: prov === 'simulated' ? 'magihub-mock' : 'magihub-response',
+        source: reportedSource(prov, input.magihubMode, r),
         exact: false,
       });
     } else {
       out.set(r.ai_request_id, {
         tokens: 0,
         provenance: sim ? 'simulated' : 'estimated',
-        source: sim ? 'magihub-mock' : 'magihub-response',
+        source: sim ? 'magihub-mock' : reportedSource('estimated', input.magihubMode, r),
         exact: false,
       });
     }
@@ -213,7 +222,9 @@ export function reportedTokens(requests: AiRequestItem[], mode: MetricsInput['ma
     : mode === 'mock'
       ? 'simulated'
       : 'real';
-  return m(sum(withUsage, (r) => r.usage!.total_tokens), prov, prov === 'simulated' ? 'magihub-mock' : 'magihub-response');
+  const sources = new Set(withUsage.map((r) => reportedSource(prov, mode, r)));
+  const src: DataSource = sources.size === 1 ? [...sources][0]! : reportedSource(prov, mode);
+  return m(sum(withUsage, (r) => r.usage!.total_tokens), prov, src);
 }
 
 export interface AllocationInput {

@@ -15,6 +15,7 @@ export const ROUTES = {
   session: '/productivity/sessions/:sessionId',
   changes: '/productivity/changes',
   commits: '/productivity/commits',
+  filters: '/productivity/filters',
   usage: '/usage',
   usageSync: '/usage/sync',
   whoami: '/whoami',

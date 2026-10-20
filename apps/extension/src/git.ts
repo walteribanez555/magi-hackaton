@@ -75,6 +75,24 @@ export async function remoteUrl(root: string, remote = 'origin'): Promise<string
   return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : undefined;
 }
 
+/** `git config --get <key>` en el repo (respeta config local, global y de sistema). */
+export async function gitConfigValue(root: string, key: string): Promise<string | undefined> {
+  const r = await runGit(root, ['config', '--get', key]);
+  const v = r.stdout.trim();
+  return r.code === 0 && v ? v : undefined;
+}
+
+export interface GitIdentity {
+  email?: string;
+  name?: string;
+}
+
+/** `user.email` / `user.name` del repo; vacíos si no están configurados. */
+export async function gitUserIdentity(root: string): Promise<GitIdentity> {
+  const [email, name] = await Promise.all([gitConfigValue(root, 'user.email'), gitConfigValue(root, 'user.name')]);
+  return { ...(email ? { email } : {}), ...(name ? { name } : {}) };
+}
+
 // ───────────────────────── parsing helpers (puros) ─────────────────────────
 
 /** Quita credenciales de una URL remota (https://user:token@host → https://host). */
@@ -238,4 +256,20 @@ export function defaultReferenceTag(d: Date = new Date()): string {
 /** Validación mínima de nombre de tag (subset seguro de git check-ref-format). */
 export function isValidTagName(tag: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$/.test(tag) && !tag.includes('..') && !tag.endsWith('.lock') && !tag.endsWith('/') && !tag.endsWith('.');
+}
+
+export interface DeveloperIdentity {
+  /** email normalizado (minúsculas, sin espacios) */
+  developer?: string;
+  developer_name?: string;
+}
+
+/**
+ * Identidad del developer para el sobre de telemetría. `override` (ajuste magicode.developerEmail)
+ * tiene prioridad sobre `git config user.email`. Se recorta a los límites del contrato.
+ */
+export function resolveDeveloper(git: GitIdentity, override?: string): DeveloperIdentity {
+  const email = (override?.trim() || git.email?.trim() || '').toLowerCase().slice(0, 254);
+  const name = (git.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+  return { ...(email ? { developer: email } : {}), ...(name ? { developer_name: name } : {}) };
 }

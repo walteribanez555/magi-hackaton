@@ -84,7 +84,7 @@ export interface TaskUsageSource {
   cachedWindow(t: string, keyId: string, from: string, to: string): Promise<UsageInput | null>;
   /** todas las peticiones de la key en [from, to] (denominador del prorrateo hora/día) */
   requestsOfKey(t: string, keyId: string, from: string, to: string): Promise<AiRequestItem[]>;
-  mode(): 'real' | 'mock';
+  mode(): 'real' | 'mock' | 'bedrock';
 }
 
 export const defaultTaskUsageSource: TaskUsageSource = {

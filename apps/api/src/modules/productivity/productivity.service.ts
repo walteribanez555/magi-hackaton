@@ -5,6 +5,7 @@ import {
   type Attribution,
   type ChangeListItem,
   type EventsResponse,
+  type FilterOptions,
   type ProductivitySummary,
   type SessionListItem,
   type TimelinePoint,
@@ -39,6 +40,17 @@ import {
   type Projection,
 } from './productivity.projection';
 import { productivityRepository, type ProductivityRepository } from './productivity.repository';
+import {
+  branchRef,
+  commitMatches,
+  normalizeDeveloper,
+  normalizeLogin,
+  prAuthorScope,
+  pullRequestMatches,
+  sessionMatches,
+  type PrAuthorScope,
+  type PrFilterRow,
+} from './productivity.filters';
 import {
   computeChangeItems,
   computeSessionItems,
@@ -129,34 +141,42 @@ export function scoringContextFor(
  * repo/sesión/rama) ∪ las enlazadas a sesiones, cambios y commits del alcance; ?task_key la acota.
  */
 export function scopeTaskKeys(
-  q: Pick<ProductivityQuery, 'repository' | 'session_id' | 'branch' | 'task_key'>,
+  q: Pick<ProductivityQuery, 'repository' | 'session_id' | 'branch' | 'task_key' | 'developer' | 'pr_author'>,
   data: { sessions: Array<{ task_key?: string }>; changes: Array<{ task_key?: string }>; commits: Array<{ task_keys?: string[] }> },
   jiraKeys: string[],
+  /** ?pr_author: las tareas de los PRs del autor también son del alcance */
+  prAuthor?: PrAuthorScope | null,
 ): Set<string> {
   const linked = [
     ...data.sessions.map((s) => s.task_key),
     ...data.changes.map((c) => c.task_key),
     ...data.commits.flatMap((c) => c.task_keys ?? []),
+    ...(q.pr_author && prAuthor ? [...prAuthor.taskKeys] : []),
   ];
-  const narrow = !!(q.repository || q.session_id || q.branch);
+  const narrow = !!(q.repository || q.session_id || q.branch || q.developer || q.pr_author);
   const out = new Set([...(narrow ? [] : jiraKeys), ...linked].filter((k): k is string => !!k));
   if (q.task_key) for (const k of [...out]) if (k !== q.task_key) out.delete(k);
   return out;
 }
 
-type PrRow = { repository?: string; state?: string; source_branch?: string; task_keys?: string[] };
+type PrRow = { repository?: string; number?: number; state?: string; source_branch?: string; task_keys?: string[]; author_login?: string | null };
 
 /**
  * PRs de counts.pull_requests: con ?repository solo ese repo; con ?task_key solo los enlazados a
  * la tarea (PR.task_keys = título/rama, lo mismo que escribe TaskLink kind=pr); con ?branch solo
- * los que salen de esa rama (source_branch).
+ * los que salen de esa rama (source_branch); ?pr_author por author_login; ?developer los PRs cuya
+ * rama origen tiene sesiones del developer (`devBranches` = repo|rama de las sesiones del alcance).
  */
-export function filterPullRequests<T extends PrRow>(prs: T[], q: Pick<ProductivityQuery, 'repository' | 'task_key' | 'branch'>): T[] {
+export function filterPullRequests<T extends PrRow>(
+  prs: T[],
+  q: Pick<ProductivityQuery, 'repository' | 'task_key' | 'branch' | 'developer' | 'pr_author'>,
+  devBranches?: Set<string>,
+): T[] {
   return prs.filter(
     (pr) =>
-      (!q.repository || pr.repository === q.repository) &&
       (!q.task_key || (pr.task_keys ?? []).includes(q.task_key)) &&
-      (!q.branch || pr.source_branch === q.branch),
+      (!q.branch || pr.source_branch === q.branch) &&
+      pullRequestMatches({ ...pr, repository: pr.repository ?? '' }, q, { devBranches }),
   );
 }
 
@@ -192,6 +212,8 @@ function isDuplicateCancel(err: unknown): boolean {
 }
 
 interface ScopeData {
+  /** PRs del autor (?pr_author) ya resueltos */
+  prAuthor?: PrAuthorScope | null;
   sessions: SessionItem[];
   requests: AiRequestItem[];
   changes: ChangeItem[];
@@ -400,7 +422,10 @@ export class ProductivityService {
 
   // ── Lecturas ─────────────────────────────────────────────────────────────
 
-  private async candidateSessions(caller: Caller, q: ProductivityQuery): Promise<{ sessions: SessionItem[]; projectIds: string[] }> {
+  private async candidateSessions(
+    caller: Caller,
+    q: ProductivityQuery,
+  ): Promise<{ sessions: SessionItem[]; projectIds: string[]; prAuthor: PrAuthorScope | null }> {
     const t = caller.tenant_id;
     let sessions: SessionItem[];
     let projectIds: string[];
@@ -417,20 +442,30 @@ export class ProductivityService {
       const since = iso(Date.parse(q.from) - SESSION_LOOKBACK_DAYS * DAY_MS);
       sessions = (await mapLimit(projectIds, 4, (p) => this.repo.listSessionsOfProject(t, p, since, q.to))).flat();
     }
+    const prAuthor = q.pr_author ? await this.prAuthorScope(t, projectIds, q) : null;
     const filtered = sessions
       .filter((s) => s.key_id === caller.key_id) // tokens = consumo de ESTA key: solo sus sesiones
       .filter((s) => !q.project_id || s.project_id === q.project_id)
-      .filter((s) => !q.repository || s.repository === q.repository)
       .filter((s) => !q.branch || s.branch === q.branch)
+      // ?repository ?developer ?pr_author (AND): todo lo demás se deriva de estas sesiones
+      .filter((s) => sessionMatches(s, q, prAuthor))
       .filter((s) => !!q.session_id || (s.last_activity_at ?? s.started_at) >= q.from)
       .sort((a, b) => b.started_at.localeCompare(a.started_at))
       .slice(0, MAX_SESSIONS);
-    return { sessions: filtered, projectIds };
+    return { sessions: filtered, projectIds, prAuthor };
+  }
+
+  /** PRs del proyecto (o del repo) cuyo autor es ?pr_author → ramas origen, SHAs y tareas. */
+  private async prAuthorScope(t: string, projectIds: string[], q: Pick<ProductivityQuery, 'repository' | 'pr_author'>): Promise<PrAuthorScope> {
+    const prs = q.repository
+      ? await this.repo.listPullRequestsOfRepo(t, q.repository).catch(() => [] as PullRequestRef[])
+      : (await mapLimit(projectIds, 4, (p) => this.repo.listProjectGsi<PullRequestRef>(t, p, 'PR#').catch(() => [] as PullRequestRef[]))).flat();
+    return prAuthorScope(prs as PrFilterRow[], q.pr_author!);
   }
 
   private async loadScope(caller: Caller, q: ProductivityQuery): Promise<ScopeData> {
     const t = caller.tenant_id;
-    const { sessions, projectIds } = await this.candidateSessions(caller, q);
+    const { sessions, projectIds, prAuthor } = await this.candidateSessions(caller, q);
     const parts = await mapLimit(sessions, 8, async (s) => {
       const [p, commits] = await Promise.all([
         this.repo.loadSessionPartition(t, s.session_id),
@@ -442,11 +477,15 @@ export class ProductivityService {
     // ?task_key: filas de la tarea o sin tarea en una sesión enlazada (mismo criterio que tasks)
     const ofTask = (row: { task_key?: string }) => !q.task_key || !row.task_key || row.task_key === q.task_key;
     const commitOfTask = (c: CommitItem) => !q.task_key || !c.task_keys?.length || c.task_keys.includes(q.task_key);
+    // ?developer: el commit lleva su developer (o el de su sesión); ?pr_author: commit en una rama de sus PRs
+    const devOf = new Map(sessions.map((s) => [s.session_id, s.developer]));
+    const commitOfScope = (c: CommitItem) => commitMatches(c, q, { pa: prAuthor, sessionDevelopers: devOf });
     return {
+      prAuthor,
       sessions,
       requests: parts.flatMap((p) => p.requests).filter((r) => inWindow(r.occurred_at, from, to) && ofTask(r)),
       changes: parts.flatMap((p) => p.changes).filter((c) => inWindow(c.first_seen_at, from, to) && ofTask(c)),
-      commits: parts.flatMap((p) => p.commits).filter((c) => inWindow(c.committed_at, from, to) && commitOfTask(c)),
+      commits: parts.flatMap((p) => p.commits).filter((c) => inWindow(c.committed_at, from, to) && commitOfTask(c) && commitOfScope(c)),
       references: parts.flatMap((p) => p.references).filter((r) => inWindow(r.occurred_at, from, to)),
       projectIds,
     };
@@ -491,15 +530,17 @@ export class ProductivityService {
    * acotado a la ventana. tasks_done: las que tienen Task con status_category = done.
    */
   private async externalCounts(t: string, q: ProductivityQuery, data: ScopeData) {
+    const devBranches = new Set(data.sessions.filter((s) => s.branch).map((s) => branchRef(s.repository, s.branch!)));
     const prs = filterPullRequests(
       (await mapLimit(data.projectIds, 4, (p) => this.repo.listProjectGsi<PrRow>(t, p, 'PR#', q.from, q.to).catch(() => []))).flat(),
       q,
+      devBranches,
     );
     type TaskRow = { task_key?: string; status_category?: string; deleted?: boolean };
     const fromJira = (await mapLimit(data.projectIds, 4, (p) => this.repo.listProjectGsi<TaskRow>(t, p, 'TASK#', q.from, q.to).catch(() => [])))
       .flat()
       .filter((tk) => tk.deleted !== true);
-    const keysInScope = scopeTaskKeys(q, data, fromJira.map((x) => x.task_key ?? ''));
+    const keysInScope = scopeTaskKeys(q, data, fromJira.map((x) => x.task_key ?? ''), data.prAuthor);
     const known = new Map(fromJira.filter((x) => x.task_key).map((x) => [x.task_key!, x]));
     const missing = [...keysInScope].filter((k) => !known.has(k));
     if (missing.length) {
@@ -522,7 +563,7 @@ export class ProductivityService {
     opts: { refresh?: boolean; withExternal?: boolean } = {},
   ): Promise<MetricsInput> {
     const t = caller.tenant_id;
-    const scoped = !!(q.project_id || q.repository || q.session_id || q.task_key || q.branch);
+    const scoped = !!(q.project_id || q.repository || q.session_id || q.task_key || q.branch || q.developer || q.pr_author);
     const [data, usage] = await Promise.all([this.loadScope(caller, q), this.usageInput(caller, apiKey, q, !!opts.refresh)]);
     const keyRequests =
       scoped && usage && usage.granularity !== 'request'
@@ -540,6 +581,8 @@ export class ProductivityService {
       ...(q.session_id ? { session_id: q.session_id } : {}),
       ...(q.task_key ? { task_key: q.task_key } : {}),
       ...(q.branch ? { branch: q.branch } : {}),
+      ...(q.developer ? { developer: q.developer } : {}),
+      ...(q.pr_author ? { pr_author: q.pr_author } : {}),
       from: q.from,
       to: q.to,
     };
@@ -610,19 +653,46 @@ export class ProductivityService {
       .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''));
   }
 
-  /** GET /productivity/commits — commits con automation (por repo o todos los del tenant). */
-  async commits(caller: Caller, q: { repository?: string; from?: string; to?: string }) {
+  /**
+   * GET /productivity/commits — commits con automation (por repo, proyecto o todos los del tenant).
+   * Filtros: ?project_id ?task_key ?branch (IDE o push) ?repository ?developer ?pr_author (AND).
+   */
+  async commits(
+    caller: Caller,
+    q: Pick<Partial<ProductivityQuery>, 'project_id' | 'repository' | 'task_key' | 'branch' | 'developer' | 'pr_author' | 'from' | 'to'>,
+  ) {
     const t = caller.tenant_id;
-    const repos = q.repository ? [q.repository] : [...new Set((await this.repo.listProjects(t)).flatMap((p) => [...(p.repositories ?? [])]))];
-    const commits = (await mapLimit(repos, 4, (r) => this.repo.listCommitsOfRepo(t, r))).flat();
+    const projects = !q.repository ? (await this.repo.listProjects(t)).filter((p) => !q.project_id || p.project_id === q.project_id) : [];
+    const repos = q.repository ? [q.repository] : [...new Set(projects.flatMap((p) => [...(p.repositories ?? [])]))];
+    const projectIds = q.project_id ? [q.project_id] : projects.map((p) => p.project_id);
+    const [all, prAuthor] = await Promise.all([
+      mapLimit(repos, 4, (r) => this.repo.listCommitsOfRepo(t, r)).then((x) => x.flat()),
+      q.pr_author ? this.prAuthorScope(t, projectIds, q) : Promise.resolve(null),
+    ]);
+    let commits = all.filter(
+      (c) =>
+        (!q.from || c.committed_at >= q.from) &&
+        (!q.to || c.committed_at <= q.to) &&
+        (!q.project_id || !c.project_id || c.project_id === q.project_id) &&
+        (!q.task_key || (c.task_keys ?? []).includes(q.task_key)) &&
+        (!q.branch || c.branch === q.branch || c.remote_branch === q.branch),
+    );
+    // ?developer: commits sin developer propio heredan el de su sesión
+    let sessionDevelopers: Map<string, string | undefined> | undefined;
+    if (q.developer) {
+      const ids = [...new Set(commits.filter((c) => !c.developer && c.session_id).map((c) => c.session_id))];
+      const sessions = ids.length ? await this.repo.batchGet<SessionItem>(ids.map((id) => keys.session(t, id))) : [];
+      sessionDevelopers = new Map(sessions.map((s) => [s.session_id, s.developer]));
+    }
+    commits = commits.filter((c) => commitMatches(c, q, { pa: prAuthor, sessionDevelopers }));
     return commits
-      .filter((c) => (!q.from || c.committed_at >= q.from) && (!q.to || c.committed_at <= q.to))
       .map((c) => ({
         sha: c.sha,
         repository: c.repository,
         session_id: c.session_id,
         project_id: c.project_id,
         branch: c.branch ?? null,
+        developer: c.developer ?? sessionDevelopers?.get(c.session_id) ?? null,
         task_keys: c.task_keys ?? [],
         parent_sha: c.parent_sha ?? null,
         committed_at: c.committed_at,
@@ -635,6 +705,63 @@ export class ProductivityService {
         provenance: c.provenance,
       }))
       .sort((a, b) => b.committed_at.localeCompare(a.committed_at));
+  }
+
+  /**
+   * GET /productivity/filters?project_id — opciones de los filtros del dashboard (tenant):
+   * repositorios (sesiones + integraciones + PRs), developers (email, nombre, nº de sesiones) y
+   * autores de PR (login, nº de PRs). Ordenados alfabéticamente.
+   */
+  async filters(caller: Caller, q: { project_id?: string }): Promise<FilterOptions> {
+    const t = caller.tenant_id;
+    const [projects, integrations] = await Promise.all([
+      this.repo.listProjects(t),
+      this.integrations.listByTenant(t).catch(() => [] as Array<{ project_id: string; status: string; repository?: string }>),
+    ]);
+    const ints = (integrations as Array<{ project_id: string; repository?: string }>).filter((i) => !q.project_id || i.project_id === q.project_id);
+    const projectIds = q.project_id
+      ? [q.project_id]
+      : [...new Set([...projects.map((p) => p.project_id), ...ints.map((i) => i.project_id)].filter(Boolean))];
+    const [sessions, prs] = await Promise.all([
+      mapLimit(projectIds, 4, (p) => this.repo.listSessionsOfProject(t, p, '', '9999').catch(() => [] as SessionItem[])).then((x) => x.flat()),
+      mapLimit(projectIds, 4, (p) => this.repo.listProjectGsi<PrRow>(t, p, 'PR#').catch(() => [] as PrRow[])).then((x) => x.flat()),
+    ]);
+    const uniqPrs = [...new Map(prs.filter((p) => p.repository).map((p) => [`${p.repository}#${p.number ?? ''}`, p])).values()];
+
+    const repositories = new Set<string>();
+    for (const p of projects) if (projectIds.includes(p.project_id)) for (const r of p.repositories ?? []) repositories.add(r);
+    for (const s of sessions) if (s.repository) repositories.add(s.repository);
+    for (const i of ints) if (i.repository) repositories.add(i.repository);
+    for (const p of uniqPrs) repositories.add(p.repository!);
+
+    const devs = new Map<string, { id: string; name: string | null; at: string; sessions: number }>();
+    for (const s of [...new Map(sessions.map((x) => [x.session_id, x])).values()]) {
+      const id = normalizeDeveloper(s.developer);
+      if (!id) continue;
+      const cur = devs.get(id) ?? { id, name: null, at: '', sessions: 0 };
+      cur.sessions++;
+      const name = s.developer_name?.trim();
+      if (name && (s.started_at ?? '') >= cur.at) {
+        cur.name = name;
+        cur.at = s.started_at ?? '';
+      }
+      devs.set(id, cur);
+    }
+
+    const authors = new Map<string, { login: string; pull_requests: number }>();
+    for (const p of uniqPrs) {
+      const k = normalizeLogin(p.author_login);
+      if (!k) continue;
+      const cur = authors.get(k) ?? { login: p.author_login!.trim(), pull_requests: 0 };
+      cur.pull_requests++;
+      authors.set(k, cur);
+    }
+
+    return {
+      repositories: [...repositories].sort(),
+      developers: [...devs.values()].map(({ id, name, sessions: n }) => ({ id, name, sessions: n })).sort((a, b) => a.id.localeCompare(b.id)),
+      pr_authors: [...authors.values()].sort((a, b) => a.login.toLowerCase().localeCompare(b.login.toLowerCase())),
+    };
   }
 }
 

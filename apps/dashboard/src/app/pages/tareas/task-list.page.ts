@@ -125,7 +125,7 @@ export class TaskListPage {
     params: () =>
       this.scope.projects.isLoading()
         ? undefined
-        : { project_id: this.scope.projectId() ?? undefined, status_category: this.category() || undefined },
+        : { project_id: this.scope.projectId() ?? undefined, ...this.scope.filterParams(), status_category: this.category() || undefined },
     stream: ({ params }) => this.api.tasks(params),
   });
 

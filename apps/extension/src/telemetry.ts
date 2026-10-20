@@ -1,7 +1,7 @@
 /**
  * Cliente de telemetría de productividad. Puro: no importa 'vscode' (store, fetch y logger se inyectan).
  *
- * - Construye el sobre (event_id, schema_version, occurred_at con offset, sesión/proyecto/repo, source).
+ * - Construye el sobre (event_id, schema_version, occurred_at con offset, sesión/proyecto/repo, developer, source).
  * - Valida contra `ProductivityEvent` de @magicode/contracts ANTES de encolar; lo inválido se descarta.
  * - Lotes ≤ 25, flush cada 5 s o al llegar a 10 eventos; reintentos con backoff exponencial.
  * - La cola sin enviar se persiste (globalState) y sobrevive a recargas de ventana.
@@ -27,6 +27,10 @@ export interface TelemetryContext {
   repository: string;
   branch?: string;
   task_key?: string;
+  /** `git config user.email` (minúsculas) o el ajuste magicode.developerEmail */
+  developer?: string;
+  /** `git config user.name` */
+  developer_name?: string;
 }
 
 export interface TelemetryOptions {
@@ -83,6 +87,8 @@ export function buildEvent<T extends ProductivityEventType>(
     repository: ctx.repository,
     ...(ctx.branch ? { branch: ctx.branch } : {}),
     ...(ctx.task_key ? { task_key: ctx.task_key } : {}),
+    ...(ctx.developer ? { developer: ctx.developer } : {}),
+    ...(ctx.developer_name ? { developer_name: ctx.developer_name } : {}),
     source: 'ide-extension',
     event_type: eventType,
     payload,

@@ -1,6 +1,6 @@
 import { extractTaskKeys, type NormalizedWebhookEvent } from '@magicode/contracts';
 import type { AdapterInput, AdaptResult } from '../webhooks.types';
-import { arr, base, commitRef, isZeroSha, obj, parseRef, str, toIso, ZERO_SHA } from './common';
+import { arr, authorOf, base, commitRef, isZeroSha, obj, parseRef, str, toIso, ZERO_SHA } from './common';
 
 type DeploymentState = Extract<NormalizedWebhookEvent, { kind: 'repo.deployment' }>['state'];
 
@@ -136,6 +136,7 @@ export function githubAdapter(input: AdapterInput): AdaptResult {
             merge_sha: merged ? (str(pr.merge_commit_sha) ?? null) : null,
             head_sha: str(head.sha) ?? '',
             url: str(pr.html_url) ?? '',
+            ...authorOf(str(obj(pr.user).login)),
           },
         ],
       };

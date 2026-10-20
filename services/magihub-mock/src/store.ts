@@ -1,14 +1,24 @@
 import type { TokenUsage } from '@magicode/contracts';
 
-/** Registro de consumo SIMULADO por petición (lo que "mediría" MagiHub). */
+/**
+ * Registro de consumo por petición. `provider` = 'bedrock' ⇒ tokens REALES medidos por Bedrock;
+ * ausente o 'mock' ⇒ SIMULADO (registros previos al modo bedrock no traen el campo).
+ */
 export interface StoredUsage {
   request_id: string;
   key_id: string;
   ts: string;
   model: string;
   usage: TokenUsage;
-  cost_usd: number;
+  /** undefined ⇒ sin precio conocido para el modelo */
+  cost_usd?: number;
+  provider?: 'bedrock' | 'mock';
+  /** solo bedrock: modelo pedido ("smart-auto") y latencia de la llamada */
+  requested_model?: string;
+  latency_ms?: number;
 }
+
+export const isRealUsage = (r: StoredUsage): boolean => r.provider === 'bedrock';
 
 export interface UsageStore {
   put(r: StoredUsage): Promise<void>;
@@ -60,7 +70,7 @@ export class DynamoUsageStore implements UsageStore {
     await (await this.client()).send(
       new PutCommand({
         TableName: this.table,
-        Item: { PK: `MOCK#K#${r.key_id}`, SK: `REQ#${r.ts}#${r.request_id}`, entity: 'MockUsage', simulated: true, ...r },
+        Item: { PK: `MOCK#K#${r.key_id}`, SK: `REQ#${r.ts}#${r.request_id}`, entity: 'MockUsage', simulated: !isRealUsage(r), ...r },
       }),
     );
   }

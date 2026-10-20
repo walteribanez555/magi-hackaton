@@ -4,7 +4,7 @@ export enum Environment {
   PRODUCTION = 'production',
 }
 
-export type MagiHubMode = 'real' | 'mock';
+export type MagiHubMode = 'real' | 'mock' | 'bedrock';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface AppConfig {
@@ -17,7 +17,11 @@ export interface AppConfig {
   cors: { origins: string[]; methods: string[]; headers: string[] };
   magihub: {
     baseUrl: string;
-    /** mock ⇒ toda cifra de tokens es `simulated` con source `magihub-mock` */
+    /**
+     * mock ⇒ toda cifra de tokens es `simulated` con source `magihub-mock`;
+     * bedrock ⇒ inferencia en Amazon Bedrock vía el adaptador: tokens `real` con source `bedrock`;
+     * real ⇒ `real` con source `magihub-usage-api`.
+     */
     mode: MagiHubMode;
     usagePath: string;
     keysSelfPath: string;
@@ -55,7 +59,7 @@ class Config {
   private load(): AppConfig {
     const env = (process.env.APP_ENV || 'development') as Environment;
     const e = process.env;
-    const mode: MagiHubMode = e.MAGIHUB_MODE === 'real' ? 'real' : 'mock';
+    const mode: MagiHubMode = e.MAGIHUB_MODE === 'real' ? 'real' : e.MAGIHUB_MODE === 'bedrock' ? 'bedrock' : 'mock';
     return {
       environment: env,
       logLevel: (e.LOG_LEVEL as LogLevel) || (env === Environment.PRODUCTION ? 'info' : 'debug'),

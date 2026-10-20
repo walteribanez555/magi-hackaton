@@ -4,6 +4,7 @@ import { buildUpdate, type UpdateSpec } from '../../common/utils/dynamo-expr';
 import { commitUrlFromRemote } from '../task-sync/rules.engine';
 import type { TriggerInput } from '../task-sync/task-sync.types';
 import { filterTaskKeys } from '../webhooks/webhooks.projection';
+import { normalizeDeveloper } from './productivity.filters';
 import type { ChangeStatus } from './productivity.types';
 
 /**
@@ -147,6 +148,10 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
   const triggers: ProjectionTrigger[] = [];
   let commitOut: Projection['commit'];
   const identity = { key_fingerprint: ctx.key_fingerprint, key_name: ctx.key_name };
+  // developer (git user.email) del envelope: se guarda en Session y se copia a Change/Commit
+  const developer = normalizeDeveloper(ev.developer);
+  const developerName = ev.developer_name?.trim() || undefined;
+  const devFields = { developer, ...(developer ? { developer_name: developerName } : {}) };
 
   // 0) dedupe — DEBE ser el primer elemento (se identifica por índice al cancelar la transacción)
   core.push({
@@ -214,6 +219,7 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
           last_activity_at: occ,
           updated_at: now,
           ...identity,
+          ...devFields,
         },
         setIfNotExists: { created_at: now },
         add: { event_count: 1 },
@@ -239,6 +245,7 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
           last_activity_at: occ,
           updated_at: now,
           ...identity,
+          ...devFields, // si un evento posterior trae el developer, la sesión lo toma
           ...(ev.event_type === 'session.ended' ? { ended_at: occ, end_reason: ev.payload.reason } : {}),
         },
         setIfNotExists: {
@@ -343,6 +350,7 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
     task_key: primaryTask,
     first_seen_at: occ,
     source: ev.source,
+    developer,
     created_at: now,
   });
 
@@ -392,7 +400,7 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
       const action: ChangeAction =
         ev.event_type === 'code.proposed' ? 'proposed' : ev.event_type === 'code.accepted' ? 'accepted' : 'rejected';
       const status = nextChangeStatus(pre.changes.get(ref), action);
-      const set: Record<string, unknown> = { status, status_rank: RANK[status], updated_at: now };
+      const set: Record<string, unknown> = { status, status_rank: RANK[status], updated_at: now, developer };
       if (ev.event_type === 'code.proposed') {
         Object.assign(set, {
           proposed_at: occ,
@@ -451,6 +459,7 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
             automation: p.automation,
             has_session_trailer: p.has_session_trailer,
             remote_url: sanitizeRemoteUrl(p.remote_url),
+            developer,
             commit_source: p.source,
             occurred_at: occ,
             source: ev.source,

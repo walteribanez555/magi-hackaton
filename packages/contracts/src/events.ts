@@ -82,7 +82,7 @@ export const AiRequestCompleted = z.object({
     latency_ms: z.number().int().nonnegative(),
     /** usage devuelto en la respuesta; se reconcilia luego con la API de consumo */
     usage: TokenUsage.optional(),
-    usage_source: DataSource.extract(['magihub-response', 'magihub-mock']).optional(),
+    usage_source: DataSource.extract(['magihub-response', 'magihub-mock', 'bedrock']).optional(),
     /** hash del contenido generado: detecta regeneraciones redundantes sin guardar código */
     output_hash: Hash.optional(),
     /** si el usuario pidió "regenerar" sobre una petición previa */

@@ -8,6 +8,7 @@
     "source": { "branch": { "name": "feature/PAY-7-refunds" }, "commit": { "hash": "c0ffee00c0ff" } },
     "destination": { "branch": { "name": "main" }, "commit": { "hash": "beef0000beef" } },
     "merge_commit": { "hash": "d00d1234d00d" },
+    "author": { "nickname": "anadev", "display_name": "Ana Dev" },
     "links": { "html": { "href": "https://bitbucket.org/acme/payments/pull-requests/17" } },
     "created_on": "2026-10-20T12:30:00.000000+00:00",
     "updated_on": "2026-10-20T13:30:00.000000+00:00"

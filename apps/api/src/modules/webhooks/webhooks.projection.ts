@@ -324,6 +324,8 @@ export class WebhookProjector {
           head_sha: ev.head_sha || (ex?.head_sha as string | undefined) || '',
           url: ev.url,
           task_keys: taskKeys,
+          // autor del PR (filtro ?pr_author); una entrega sin autor no borra el conocido
+          author_login: ev.author_login || (ex?.author_login as string | undefined) || undefined,
           last_event_at: ev.received_at,
           ...keys.pullRequestGsi1(t, ctx.project_id, ev.received_at),
         },

@@ -19,6 +19,7 @@ export const DataSource = z.enum([
   'declared-reference', // tag elegido como "versión demo"
   'deployment-evidence', // GitHub Deployments / pipeline CI/CD
   'magihub-mock', // servicio simulado (services/magihub-mock)
+  'bedrock', // inferencia real en Amazon Bedrock vía el adaptador MagiHub (tokens medidos por Bedrock)
   'demo-seed', // scripts/seed-demo.ts
 ]);
 export type DataSource = z.infer<typeof DataSource>;

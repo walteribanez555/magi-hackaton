@@ -122,6 +122,8 @@ export interface ParsedSmartAuto {
   finishReason?: string;
   /** la respuesta se declara simulada (mock) */
   simulated: boolean;
+  /** proveedor real detrás de Smart Auto (header `x-magihub-provider`, p. ej. "bedrock") */
+  provider?: string;
 }
 
 const clampId = (s: string) => s.trim().slice(0, 128);
@@ -174,6 +176,27 @@ export function isSimulated(headers: HeaderBag, body: unknown): boolean {
   return false;
 }
 
+/** Header `x-magihub-provider` normalizado (minúsculas); undefined si no viene. */
+export function pickProvider(headers: HeaderBag): string | undefined {
+  const v = headers.get('x-magihub-provider')?.trim().toLowerCase();
+  return v ? v.slice(0, 40) : undefined;
+}
+
+export type UsageSource = 'bedrock' | 'magihub-mock' | 'magihub-response';
+
+/**
+ * Origen del `usage` reportado:
+ * - simulado explícito (mock) → 'magihub-mock'
+ * - `x-magihub-provider: bedrock` → 'bedrock' (tokens reales medidos por Bedrock, aunque la URL sea local)
+ * - URL local sin proveedor declarado → 'magihub-mock' (el mock de la demo)
+ * - resto → 'magihub-response'
+ */
+export function usageSourceFor(r: { simulated: boolean; provider?: string }, baseUrl: string): UsageSource {
+  if (r.simulated) return 'magihub-mock';
+  if (r.provider === 'bedrock') return 'bedrock';
+  return isLocalUrl(baseUrl) ? 'magihub-mock' : 'magihub-response';
+}
+
 export function parseSmartAutoResponse(headers: HeaderBag, body: unknown, localId: () => string): ParsedSmartAuto {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   const choices = Array.isArray(b.choices) ? (b.choices as Array<Record<string, unknown>>) : [];
@@ -186,6 +209,7 @@ export function parseSmartAutoResponse(headers: HeaderBag, body: unknown, localI
       .map((p) => (typeof p.text === 'string' ? p.text : ''))
       .join('');
   } else if (typeof first.text === 'string') content = first.text;
+  const provider = pickProvider(headers);
   return {
     ...pickRequestId(headers, body, localId),
     model: typeof b.model === 'string' ? b.model.slice(0, 120) : undefined,
@@ -193,6 +217,7 @@ export function parseSmartAutoResponse(headers: HeaderBag, body: unknown, localI
     content,
     finishReason: typeof first.finish_reason === 'string' ? first.finish_reason : undefined,
     simulated: isSimulated(headers, body),
+    ...(provider ? { provider } : {}),
   };
 }
 
@@ -220,6 +245,7 @@ export class SmartAutoError extends Error {
     readonly usage?: TokenUsage,
     readonly model?: string,
     readonly simulated = false,
+    readonly provider?: string,
   ) {
     super(message);
     this.name = 'SmartAutoError';
@@ -299,6 +325,7 @@ export async function callSmartAuto(call: SmartAutoCall): Promise<SmartAutoResul
         parsed.usage,
         parsed.model,
         parsed.simulated,
+        parsed.provider,
       );
     }
     if (!body) {

@@ -83,13 +83,13 @@ export class ResumenComponent {
   });
 
   protected readonly tasks = rxResource({
-    params: () => this.scope.projectId() ?? undefined,
-    stream: ({ params }) => this.tasksApi.tasks({ project_id: params }).pipe(catchError(() => of([] as TaskListItem[]))),
+    params: () => this.scope.projectQuery(),
+    stream: ({ params }) => this.tasksApi.tasks(params).pipe(catchError(() => of([] as TaskListItem[]))),
   });
 
   protected readonly branches = rxResource({
-    params: () => this.scope.projectId() ?? undefined,
-    stream: ({ params }) => this.tasksApi.branches({ project_id: params }).pipe(catchError(() => of([]))),
+    params: () => this.scope.projectQuery(),
+    stream: ({ params }) => this.tasksApi.branches(params).pipe(catchError(() => of([]))),
   });
 
   /** Cambios del proyecto: solo para derivar la criticidad por tarea (peor cambio puntuado). */

@@ -1,6 +1,6 @@
 import { extractTaskKeys, type NormalizedWebhookEvent } from '@magicode/contracts';
 import type { AdapterInput, AdaptResult } from '../webhooks.types';
-import { arr, base, commitRef, isZeroSha, obj, parseRef, str, toIso, ZERO_SHA } from './common';
+import { arr, authorOf, base, commitRef, isZeroSha, obj, parseRef, str, toIso, ZERO_SHA } from './common';
 
 type DeploymentState = Extract<NormalizedWebhookEvent, { kind: 'repo.deployment' }>['state'];
 
@@ -108,6 +108,7 @@ export function gitlabAdapter(input: AdapterInput): AdaptResult {
             merge_sha: state === 'merged' ? (str(a.merge_commit_sha) ?? null) : null,
             head_sha: str(obj(a.last_commit).id) ?? '',
             url: str(a.url) ?? '',
+            ...authorOf(str(obj(p.user).username)),
           },
         ],
       };

@@ -64,7 +64,7 @@ export class RamasPage {
   private readonly tasks = inject(TasksService);
 
   protected readonly branches = rxResource({
-    params: () => this.scope.projectId() ?? undefined,
-    stream: ({ params }) => this.tasks.branches({ project_id: params }),
+    params: () => this.scope.projectQuery(),
+    stream: ({ params }) => this.tasks.branches(params),
   });
 }

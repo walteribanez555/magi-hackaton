@@ -11,15 +11,19 @@ import {
   absoluteGitDir,
   currentBranch,
   defaultReferenceTag,
+  gitUserIdentity,
   headSha,
   hooksDir,
   isValidTagName,
   remoteUrl,
   repoRoot,
   repoSlugFromRemote,
+  resolveDeveloper,
   runGit,
   sanitizeRemoteUrl,
   toRepoPath,
+  type DeveloperIdentity,
+  type GitIdentity,
 } from './git';
 import { hookStatus, installHook, removeSessionFile, writeSessionFile } from './hook';
 import { createLogger, errorMessage, type Logger } from './log';
@@ -30,6 +34,7 @@ import {
   isResumable,
   markProcessed,
   recordCommitted,
+  recordModel,
   round2,
   sessionAcceptedHashes,
   SESSION_KEY,
@@ -45,8 +50,9 @@ import {
   conformText,
   extractCodeBlock,
   fetchKeyIdentity,
-  isLocalUrl,
   type SmartAutoResult,
+  type UsageSource,
+  usageSourceFor,
 } from './smartAuto';
 import { TelemetryClient, type PayloadOf, type TelemetryContext } from './telemetry';
 import { SessionTreeProvider, StatusBar, type ViewModel } from './views';
@@ -77,6 +83,9 @@ export class MagiCodeController implements vscode.Disposable {
   private branch: string | undefined;
   private taskKey: string | undefined;
   private taskSource: ViewModel['taskSource'];
+  /** identidad Git cacheada (user.email / user.name); se refresca al iniciar sesión y al cambiar HEAD */
+  private gitIdentity: GitIdentity = {};
+  private developer: DeveloperIdentity = {};
   private busy: string | undefined;
   private watchers: vscode.Disposable[] = [];
   private pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -133,6 +142,7 @@ export class MagiCodeController implements vscode.Disposable {
     }
     this.log.info(`Repo: ${this.repo.root} (${this.repo.repository})`);
     await this.refreshBranch(false);
+    await this.refreshDeveloper(false);
     if (!this.session) {
       const stored = this.ctx.workspaceState.get<SessionState>(SESSION_KEY);
       if (isResumable(stored, this.repo.root)) {
@@ -179,7 +189,34 @@ export class MagiCodeController implements vscode.Disposable {
       repository: this.repo?.repository ?? 'local',
       ...(this.branch ? { branch: this.branch.slice(0, 256) } : {}),
       ...(this.taskKey ? { task_key: this.taskKey } : {}),
+      ...this.developer,
     };
+  }
+
+  /** Lee `git config user.email/user.name` del repo y aplica el ajuste magicode.developerEmail. */
+  private async refreshDeveloper(notify: boolean): Promise<void> {
+    if (this.repo) {
+      try {
+        this.gitIdentity = await gitUserIdentity(this.repo.root);
+      } catch (err) {
+        this.log.warn(`No se pudo leer la identidad de Git: ${errorMessage(err)}`);
+      }
+    }
+    this.applyDeveloper(notify);
+  }
+
+  private applyDeveloper(notify: boolean): void {
+    const prev = this.developer;
+    this.developer = resolveDeveloper(this.gitIdentity, readConfig().developerEmail);
+    if (prev.developer === this.developer.developer && prev.developer_name === this.developer.developer_name) return;
+    if (notify || !prev.developer) {
+      this.log.info(
+        this.developer.developer
+          ? `Developer: ${this.developer.developer}${this.developer.developer_name ? ` (${this.developer.developer_name})` : ''}`
+          : 'Developer sin email: configura git config user.email o el ajuste magicode.developerEmail',
+      );
+    }
+    this.refreshViews();
   }
 
   private emit<T extends ProductivityEventType>(type: T, payload: PayloadOf<T>, session = this.session): boolean {
@@ -209,6 +246,7 @@ export class MagiCodeController implements vscode.Disposable {
     }
     const head = await headSha(this.repo.root);
     await this.refreshBranch(false);
+    await this.refreshDeveloper(false);
     this.session = createSession(this.repo.root, new Date(), head);
     await this.persist();
     this.emit('session.started', {
@@ -251,7 +289,7 @@ export class MagiCodeController implements vscode.Disposable {
 
   private endStoredSession(stored: SessionState, reason: 'idle' | 'window-closed'): void {
     this.telemetry.track(
-      { session_id: stored.id, project_id: this.projectId(), repository: this.repo?.repository ?? 'local' },
+      { session_id: stored.id, project_id: this.projectId(), repository: this.repo?.repository ?? 'local', ...this.developer },
       'session.ended',
       { reason },
     );
@@ -406,18 +444,20 @@ export class MagiCodeController implements vscode.Disposable {
       : undefined;
     session.stats.requests++;
     if (result.usage) session.stats.tokens_reported += result.usage.total_tokens;
+    const usageSource = this.usageSource(result);
+    recordModel(session.stats, result.model, result.usage ? usageSource : undefined);
     this.emit('ai.request.completed', {
       ai_request_id: result.requestId,
       ...(result.model ? { model: result.model } : {}),
       status: 'ok',
       latency_ms: result.latencyMs,
-      ...(result.usage ? { usage: result.usage, usage_source: this.usageSource(result.simulated) } : {}),
+      ...(result.usage ? { usage: result.usage, usage_source: usageSource } : {}),
       ...(extracted && extracted.code.trim() ? { output_hash: outputHash(extracted.code) } : {}),
       ...(prefill?.regenerates ? { regenerates: prefill.regenerates.slice(0, 128) } : {}),
     });
     this.log.info(
       `Smart Auto ok: request ${result.requestId} (${result.requestIdSource}) · modelo ${result.model ?? '?'} · ` +
-        `${result.usage?.total_tokens ?? '?'} tokens · ${result.latencyMs} ms${result.simulated ? ' · SIMULADO' : ''}`,
+        `${result.usage?.total_tokens ?? '?'} tokens (${usageSource}) · ${result.latencyMs} ms${result.provider ? ` · proveedor ${result.provider}` : ''}${result.simulated ? ' · SIMULADO' : ''}`,
     );
     await this.persist();
 
@@ -449,8 +489,8 @@ export class MagiCodeController implements vscode.Disposable {
     await this.handleDecision(session, doc, proposal, decision, versionAtRequest, instruction);
   }
 
-  private usageSource(simulated: boolean): 'magihub-mock' | 'magihub-response' {
-    return simulated || isLocalUrl(readConfig().magihubBaseUrl) ? 'magihub-mock' : 'magihub-response';
+  private usageSource(r: { simulated: boolean; provider?: string }): UsageSource {
+    return usageSourceFor(r, readConfig().magihubBaseUrl);
   }
 
   private recordRequestFailure(session: SessionState, err: unknown, regenerates?: string): void {
@@ -459,12 +499,13 @@ export class MagiCodeController implements vscode.Disposable {
     session.stats.requests++;
     if (e.status === 'error') session.stats.request_errors++;
     if (e.usage) session.stats.tokens_reported += e.usage.total_tokens;
+    recordModel(session.stats, e.model, e.usage ? this.usageSource(e) : undefined);
     this.emit('ai.request.completed', {
       ai_request_id: e.requestId,
       ...(e.model ? { model: e.model } : {}),
       status: e.status,
       latency_ms: e.latencyMs,
-      ...(e.usage ? { usage: e.usage, usage_source: this.usageSource(e.simulated) } : {}),
+      ...(e.usage ? { usage: e.usage, usage_source: this.usageSource(e) } : {}),
       ...(regenerates ? { regenerates: regenerates.slice(0, 128) } : {}),
     });
     void this.persist();
@@ -708,6 +749,7 @@ export class MagiCodeController implements vscode.Disposable {
     if (!s) return;
     const head = await headSha(this.repo.root);
     if (!head || head === s.last_head) return;
+    await this.refreshDeveloper(true); // HEAD cambió: barato re-leer user.email/user.name
     const shas = await listNewCommits(this.repo.root, s.last_head, head);
     const since = Date.parse(s.started_at) - 60_000;
     let emitted = 0;
@@ -914,6 +956,8 @@ export class MagiCodeController implements vscode.Disposable {
       repository: this.repo?.repository,
       branch: this.branch,
       taskKey: this.taskKey,
+      developer: this.developer.developer,
+      developerName: this.developer.developer_name,
       pendingTelemetry: this.telemetry.pending,
     });
     const pick = await vscode.window.showInformationMessage('MagiCode · estadísticas de la sesión', { modal: true, detail }, 'Abrir dashboard', 'Ver log');
@@ -955,6 +999,9 @@ export class MagiCodeController implements vscode.Disposable {
       branch: this.branch,
       taskKey: this.taskKey,
       taskSource: this.taskSource,
+      developer: this.developer.developer,
+      developerName: this.developer.developer_name,
+      developerSource: readConfig().developerEmail ? 'setting' : 'git',
       pendingTelemetry: this.telemetry.pending,
       telemetryError: this.telemetry.lastError,
       busy: this.busy,
@@ -979,6 +1026,7 @@ export class MagiCodeController implements vscode.Disposable {
       this.repo.repository = (cfg.repository || repoSlugFromRemote(remote) || nodePath.basename(this.repo.root)).slice(0, 256);
     }
     this.resolveTask();
+    this.applyDeveloper(true);
     await this.syncSessionFile();
     this.refreshViews();
   }

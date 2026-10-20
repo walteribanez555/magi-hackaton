@@ -9,6 +9,11 @@ export type Json = Record<string, unknown>;
 export const obj = (v: unknown): Json => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : {});
 export const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 export const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 ? v : undefined);
+/** author_login del PR (solo si el proveedor lo trae; sin espacios). */
+export const authorOf = (login: string | undefined): { author_login?: string } => {
+  const v = login?.trim();
+  return v ? { author_login: v } : {};
+};
 export const num = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : undefined;
 

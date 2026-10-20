@@ -1,4 +1,4 @@
-import { HttpContext } from '@angular/common/http';
+import { HttpClient, HttpContext } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import type {
   AvailableTransition,
@@ -7,31 +7,61 @@ import type {
   TaskActionRequest,
   TaskListItem,
 } from '@magicode/contracts';
-import type { Observable } from 'rxjs';
+import type { PullRequestTotals } from '@magicode/contracts';
+import { map, type Observable } from 'rxjs';
 
-import { ApiClient } from '@/core/http/api-client';
+import { ApiClient, toParams } from '@/core/http/api-client';
 import { SILENT_ERRORS } from '@/core/http/http-context';
+import { FilterStateService, type FilterParams } from './filter-state.service';
 import type { PullRequestListItem, TaskDetail } from './types';
 
-/** Tareas (Jira), ramas, pull requests y la respuesta de vuelta a Jira (outbox). */
+type ProjectQuery = FilterParams & { project_id?: string };
+
+/**
+ * Tareas (Jira), ramas, pull requests y la respuesta de vuelta a Jira (outbox).
+ * Las listas llevan los filtros de la cabecera (repositorio, developer, autor de PR).
+ */
 @Injectable({ providedIn: 'root' })
 export class TasksService {
   private readonly api = inject(ApiClient);
+  private readonly http = inject(HttpClient);
+  private readonly filters = inject(FilterStateService);
 
-  tasks(q: { project_id?: string; status_category?: string }): Observable<TaskListItem[]> {
-    return this.api.get<TaskListItem[]>('tasks', { query: q });
+  tasks(q: ProjectQuery & { status_category?: string }): Observable<TaskListItem[]> {
+    return this.api.get<TaskListItem[]>('tasks', { query: this.filters.withFilters(q) });
   }
 
   task(taskKey: string): Observable<TaskDetail> {
     return this.api.get<TaskDetail>('task', { params: { taskKey } });
   }
 
-  branches(q: { project_id?: string; repository?: string }): Observable<BranchListItem[]> {
-    return this.api.get<BranchListItem[]>('branches', { query: q });
+  branches(q: ProjectQuery): Observable<BranchListItem[]> {
+    return this.api
+      .get<BranchListItem[]>('branches', { query: this.filters.withFilters(q) })
+      .pipe(map((list) => this.filters.applyTo(list)));
   }
 
-  pullRequests(q: { project_id?: string; repository?: string; state?: string }): Observable<PullRequestListItem[]> {
-    return this.api.get<PullRequestListItem[]>('pullRequests', { query: q });
+  pullRequests(q: ProjectQuery & { state?: string }): Observable<PullRequestListItem[]> {
+    return this.api
+      .get<PullRequestListItem[]>('pullRequests', { query: this.filters.withFilters(q) })
+      .pipe(map((list) => this.filters.applyTo(list)));
+  }
+
+  /** PRs con el cuerpo completo: `meta` trae los totales históricos (PullRequestTotals). */
+  pullRequestsWithTotals<T extends object = PullRequestListItem>(
+    q: ProjectQuery & { state?: string },
+    opts: { filtered?: boolean; context?: HttpContext } = {},
+  ): Observable<{ data: T[]; meta: PullRequestTotals | null }> {
+    const query = opts.filtered === false ? q : this.filters.withFilters(q);
+    return this.http
+      .get<{ data?: T[]; meta?: PullRequestTotals } | T[]>(this.api.url('pullRequests'), {
+        params: toParams(query),
+        context: opts.context,
+      })
+      .pipe(
+        map((b) => (Array.isArray(b) ? { data: b, meta: null } : { data: b.data ?? [], meta: b.meta ?? null })),
+        map((r) => (opts.filtered === false ? r : { ...r, data: this.filters.applyTo(r.data) })),
+      );
   }
 
   /** Transiciones disponibles AHORA en Jira para el issue (consulta en vivo). */

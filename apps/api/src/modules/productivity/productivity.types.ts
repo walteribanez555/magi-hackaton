@@ -48,6 +48,9 @@ export interface SessionItem extends BaseItem {
   /** identidad MagiHub de la key (sha256(key)[:12] y nombre) — nunca la key */
   key_fingerprint?: string;
   key_name?: string;
+  /** `git config user.email` en minúsculas (filtro ?developer) y nombre para mostrar */
+  developer?: string;
+  developer_name?: string;
   GSI1PK?: string;
   GSI1SK?: string;
 }
@@ -63,7 +66,7 @@ export interface AiRequestItem extends BaseItem {
   status: 'ok' | 'error' | 'cancelled';
   latency_ms: number;
   usage?: TokenUsage;
-  usage_source?: 'magihub-response' | 'magihub-mock';
+  usage_source?: 'magihub-response' | 'magihub-mock' | 'bedrock';
   output_hash?: string;
   regenerates?: string;
   occurred_at: string;
@@ -100,6 +103,8 @@ export interface ChangeItem extends BaseItem {
   /** lo escribe el módulo scoring (ChangeScores) */
   scores?: ChangeScores;
   source?: EventSource;
+  /** developer del evento (email de git en minúsculas) */
+  developer?: string;
 }
 
 export interface CommitItem extends BaseItem {
@@ -116,6 +121,8 @@ export interface CommitItem extends BaseItem {
   automation: CommitAutomation;
   has_session_trailer: boolean;
   remote_url?: string;
+  /** developer del IDE que reportó el commit (email de git en minúsculas) */
+  developer?: string;
   commit_source: 'git-local' | 'git-remote';
   reference_tags?: string[];
   occurred_at: string;
@@ -164,6 +171,8 @@ export interface PullRequestRef {
   source_branch?: string | null;
   merge_sha?: string | null;
   head_sha?: string | null;
+  author_login?: string | null;
+  task_keys?: string[];
 }
 
 /** Consumo MagiHub ya leído de los snapshots para la ventana. */
@@ -179,10 +188,10 @@ export interface UsageInput {
 /** Entrada pura del cálculo de métricas (productivity.metrics.ts). Arrays ya filtrados por ventana/scope. */
 export interface MetricsInput {
   scope: SummaryScope;
-  /** true si hay filtro de project/repository/session/task/branch (no es "toda la key") */
+  /** true si hay filtro de project/repository/session/task/branch/developer/pr_author (no es "toda la key") */
   scoped: boolean;
-  /** MAGIHUB_MODE=mock ⇒ toda cifra de tokens es simulated */
-  magihubMode: 'real' | 'mock';
+  /** MAGIHUB_MODE=mock ⇒ toda cifra de tokens es simulated; bedrock ⇒ real con source bedrock */
+  magihubMode: 'real' | 'mock' | 'bedrock';
   usage: UsageInput | null;
   sessions: SessionItem[];
   requests: AiRequestItem[];
@@ -205,6 +214,10 @@ export interface ProductivityQuery {
   session_id?: string;
   task_key?: string;
   branch?: string;
+  /** email de git (minúsculas) */
+  developer?: string;
+  /** login del autor del PR */
+  pr_author?: string;
   from: string;
   to: string;
 }
