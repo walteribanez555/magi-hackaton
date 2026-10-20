@@ -232,7 +232,7 @@ export class TaskSyncRepository {
   async markCredentials(
     tenantId: string,
     integrationId: string,
-    input: { service_account_id: string; managed_field_ids: string[]; base_url?: string },
+    input: { service_account_id?: string; managed_field_ids: string[]; base_url?: string },
     at: string,
   ): Promise<void> {
     await this.db().send(
@@ -243,11 +243,12 @@ export class TaskSyncRepository {
               TableName: tableName(),
               Key: keys.integrationLookup(integrationId),
               UpdateExpression:
-                'SET service_account_id = :a, managed_field_ids = :m, credentials_configured_at = :at, updated_at = :at' +
+                'SET managed_field_ids = :m, credentials_configured_at = :at, updated_at = :at' +
+                (input.service_account_id ? ', service_account_id = :a' : '') +
                 (input.base_url ? ', base_url = if_not_exists(base_url, :b)' : ''),
               ConditionExpression: 'attribute_exists(PK) AND tenant_id = :t',
               ExpressionAttributeValues: {
-                ':a': input.service_account_id,
+                ...(input.service_account_id ? { ':a': input.service_account_id } : {}),
                 ':m': input.managed_field_ids,
                 ':at': at,
                 ':t': tenantId,

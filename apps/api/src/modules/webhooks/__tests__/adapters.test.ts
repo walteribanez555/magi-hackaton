@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { extractTaskKeys, type NormalizedWebhookEvent } from '@magicode/contracts';
 import { adaptWebhook } from '../adapters';
 import { jiraStatusCategory, parseTrailers, toIso } from '../adapters/common';
-import { isSelfEcho } from '../adapters/jira.adapter';
+import { isHealthcheckChange, isSelfEcho } from '../adapters/jira.adapter';
 import { linearStatusCategory } from '../adapters/linear.adapter';
 import type { AdapterInput, AdaptResult } from '../webhooks.types';
 import { fixture } from './helpers';
@@ -214,7 +214,7 @@ describe('jira adapter', () => {
       status_category: 'in_progress',
       assignee: 'Ana Dev',
       story_points: 5,
-      url: 'https://acme.atlassian.net/browse/MAG-123',
+      url: 'https://example.atlassian.net/browse/MAG-123',
       updated_at: '2026-10-20T13:20:00.000Z',
     });
   });
@@ -223,10 +223,10 @@ describe('jira adapter', () => {
     const p = fixture<{ issue: { fields: Record<string, unknown> } }>('jira-issue_updated.json');
     p.issue.fields.customfield_10028 = 8;
     const ev = only(
-      adaptWebhook('jira', { ...input(undefined, 'jira-issue_updated.json', { base_url: 'https://jira.acme.dev/', story_points_field: 'customfield_10028' }), payload: p }),
+      adaptWebhook('jira', { ...input(undefined, 'jira-issue_updated.json', { base_url: 'https://jira.example.com/', story_points_field: 'customfield_10028' }), payload: p }),
       'task.upserted',
     );
-    expect(ev.url).toBe('https://jira.acme.dev/browse/MAG-123');
+    expect(ev.url).toBe('https://jira.example.com/browse/MAG-123');
     expect(ev.story_points).toBe(8);
   });
 
@@ -251,8 +251,26 @@ describe('jira adapter', () => {
     expect(adaptWebhook('jira', { ...input(undefined, 'jira-issue_updated.json'), payload }).type).toBe('ignored');
   });
 
+  describe('prueba de ida y vuelta (etiqueta magicode-healthcheck)', () => {
+    const withLabels = (from: string, to: string, extra: unknown[] = []) => {
+      const p = fixture<{ changelog: { items: unknown[] } }>('jira-issue_updated.json');
+      p.changelog.items = [{ field: 'labels', fieldId: 'labels', fromString: from, toString: to }, ...extra];
+      return p;
+    };
+    it('solo agregar/quitar la etiqueta ⇒ type test (antes que el anti-bucle)', () => {
+      expect(isHealthcheckChange(withLabels('a', 'a magicode-healthcheck') as never)).toBe(true);
+      expect(isHealthcheckChange(withLabels('magicode-healthcheck', '') as never)).toBe(true);
+      const res = adaptWebhook('jira', { ...input(undefined, 'jira-issue_updated.json', { service_account_id: 'fake-account-ana-0001' }), payload: withLabels('', 'magicode-healthcheck') });
+      expect(res).toEqual({ type: 'test', task_key: 'MAG-123' });
+    });
+    it('otras etiquetas o más cambios ⇒ no es prueba', () => {
+      expect(isHealthcheckChange(withLabels('', 'urgent') as never)).toBe(false);
+      expect(isHealthcheckChange(withLabels('', 'magicode-healthcheck', [{ field: 'status', fieldId: 'status' }]) as never)).toBe(false);
+    });
+  });
+
   describe('anti-bucle', () => {
-    const SA = '5b10ac8d82e05b22cc7d4ef5';
+    const SA = 'fake-account-ana-0001';
     it('ignora (self) un cambio de estado hecho por la cuenta de servicio', () => {
       const res = adaptWebhook('jira', input(undefined, 'jira-issue_updated.json', { service_account_id: SA }));
       expect(res).toEqual({ type: 'ignored', reason: 'self', self: true });

@@ -59,8 +59,11 @@ export class FakeStore {
     const resolve = (tok: string): unknown => {
       tok = tok.trim();
       if (tok.startsWith(':')) return values[tok];
-      const name = tok.startsWith('#') ? names[tok]! : tok;
-      return item?.[name];
+      // rutas de documento: a.b / #n.#m
+      return tok.split('.').reduce<unknown>((acc, part) => {
+        const name = part.startsWith('#') ? names[part]! : part;
+        return acc && typeof acc === 'object' ? (acc as Record<string, unknown>)[name] : undefined;
+      }, item);
     };
     return expr.split(/\s+OR\s+/).some((orPart) =>
       orPart

@@ -18,6 +18,7 @@ import { DAY_MS, iso } from '../../common/utils/time';
 import { HttpException, NotFoundException, UnauthorizedException } from '../../common/exceptions';
 import { usageService, type UsageService } from '../usage/usage.service';
 import { usageRepository } from '../usage/usage.repository';
+import { summaryWarnings } from '../integration-health/summary-warnings';
 import {
   changeRef,
   commitRef,
@@ -278,7 +279,13 @@ export class ProductivityService {
   private async usageInput(caller: Caller, apiKey: string, q: ProductivityQuery, force: boolean): Promise<UsageInput | null> {
     try {
       const w = await this.usage.getWindow(caller, apiKey, q.from, q.to, { force });
-      return { records: w.response.records, granularity: w.granularity, provenance: w.provenance, source: w.source };
+      return {
+        records: w.response.records,
+        granularity: w.granularity,
+        provenance: w.provenance,
+        source: w.source,
+        ...(w.response.ingestion_delay_minutes !== undefined ? { ingestion_delay_minutes: w.response.ingestion_delay_minutes } : {}),
+      };
     } catch (err) {
       if (err instanceof UnauthorizedException) throw err;
       logger.warn('usage no disponible; se usa Σ usage reportado (estimated)', {
@@ -354,7 +361,18 @@ export class ProductivityService {
   }
 
   async summary(caller: Caller, apiKey: string, q: ProductivityQuery, refresh = false): Promise<ProductivitySummary> {
-    return computeSummary(await this.buildInput(caller, apiKey, q, { refresh, withExternal: true }));
+    const input = await this.buildInput(caller, apiKey, q, { refresh, withExternal: true });
+    const summary = computeSummary(input);
+    // avisos de readiness (webhooks obligatorios), retraso de ingesta y scoring heurístico — integration-health
+    const warnings = await summaryWarnings(caller.tenant_id, {
+      ...(q.project_id ? { project_id: q.project_id } : {}),
+      ...(q.repository ? { repository: q.repository } : {}),
+      to: q.to,
+      now: input.now,
+      usage: input.usage,
+      changes: input.changes,
+    });
+    return { ...summary, warnings: [...summary.warnings, ...warnings] };
   }
 
   async timeline(caller: Caller, apiKey: string, q: ProductivityQuery, bucket: 'hour' | 'day'): Promise<TimelinePoint[]> {

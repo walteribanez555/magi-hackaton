@@ -15,8 +15,8 @@
       "message": "MAG-123 add login form\n\nMagiCode-Session: sess_01J9ZK\nMagiCode-Task: MAG-124",
       "timestamp": "2026-10-20T09:15:22-05:00",
       "url": "https://github.com/acme/shop/commit/0d1a26e67d8f5eaf1f6ba5c57fc3c7d91ac0fd1c",
-      "author": { "name": "Ana Dev", "email": "ana@acme.dev", "username": "anadev" },
-      "committer": { "name": "Ana Dev", "email": "ana@acme.dev", "username": "anadev" },
+      "author": { "name": "Ana Dev", "email": "ana@example.com", "username": "anadev" },
+      "committer": { "name": "Ana Dev", "email": "ana@example.com", "username": "anadev" },
       "added": ["src/login/form.ts", "src/login/form.test.ts"],
       "removed": [],
       "modified": ["src/app.ts"]
@@ -28,7 +28,7 @@
       "message": "fix: use UTF-8 encoding",
       "timestamp": "2026-10-20T09:40:01-05:00",
       "url": "https://github.com/acme/shop/commit/a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
-      "author": { "name": "Ana Dev", "email": "ana@acme.dev", "username": "anadev" },
+      "author": { "name": "Ana Dev", "email": "ana@example.com", "username": "anadev" },
       "committer": { "name": "GitHub", "email": "noreply@github.com", "username": "web-flow" },
       "added": [],
       "removed": ["src/legacy.ts"],
@@ -37,6 +37,6 @@
   ],
   "head_commit": { "id": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678" },
   "repository": { "id": 1296269, "name": "shop", "full_name": "acme/shop", "private": true, "default_branch": "main" },
-  "pusher": { "name": "anadev", "email": "ana@acme.dev" },
+  "pusher": { "name": "anadev", "email": "ana@example.com" },
   "sender": { "login": "anadev", "id": 583231, "type": "User" }
 }

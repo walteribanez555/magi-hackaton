@@ -25,6 +25,25 @@ export function isSelfEcho(payload: Record<string, unknown>, serviceAccountId?: 
   });
 }
 
+export const HEALTHCHECK_LABEL = 'magicode-healthcheck';
+
+/**
+ * ¿El changelog solo agrega/quita la etiqueta de healthcheck? (prueba de ida y vuelta de MagiCode).
+ * Se evalúa ANTES del anti-bucle: la hace la cuenta de servicio, pero no debe ignorarse.
+ */
+export function isHealthcheckChange(payload: Record<string, unknown>): boolean {
+  const items = Array.isArray(obj(payload.changelog).items) ? (obj(payload.changelog).items as unknown[]) : [];
+  if (!items.length) return false;
+  return items.every((raw) => {
+    const it = obj(raw);
+    if ((str(it.fieldId) ?? str(it.field) ?? '').toLowerCase() !== 'labels') return false;
+    const from = new Set((str(it.fromString) ?? '').split(/\s+/).filter(Boolean));
+    const to = new Set((str(it.toString) ?? '').split(/\s+/).filter(Boolean));
+    const diff = [...from].filter((l) => !to.has(l)).concat([...to].filter((l) => !from.has(l)));
+    return diff.length === 1 && diff[0] === HEALTHCHECK_LABEL;
+  });
+}
+
 /** https://empresa.atlassian.net/rest/api/2/issue/10001 → https://empresa.atlassian.net */
 function originOf(self: string | undefined): string | undefined {
   if (!self) return undefined;
@@ -52,6 +71,7 @@ export function jiraAdapter(input: AdapterInput): AdaptResult {
   }
   if (!key) return { type: 'ignored', reason: `${event} without issue key` };
   if (event === 'jira:issue_deleted') return { type: 'events', events: [{ ...b, kind: 'task.deleted', task_key: key }] };
+  if (event === 'jira:issue_updated' && isHealthcheckChange(p)) return { type: 'test', task_key: key };
   if (event === 'jira:issue_updated' && isSelfEcho(p, input.options?.service_account_id, input.options?.managed_field_ids)) {
     return { type: 'ignored', reason: 'self', self: true };
   }

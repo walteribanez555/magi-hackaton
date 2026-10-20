@@ -11,6 +11,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as rds from 'aws-cdk-lib/aws-rds';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
@@ -34,6 +35,11 @@ export interface MagicodeStackProps extends cdk.StackProps {
    * es obligatorio `magihubBaseUrl` (MagiHub real).
    */
   deployMock?: boolean;
+  /**
+   * Demo sin login: la API acepta peticiones sin Authorization como la key de demo del mock.
+   * Por defecto activo solo fuera de prod y con el mock (la key `mh_demo_*` no es un secreto).
+   */
+  demoOpenAccess?: boolean;
 
   /**
    * Base URL de MagiHub. Si no viene, la API usa la URL del mock desplegado aquí
@@ -46,6 +52,14 @@ export interface MagicodeStackProps extends cdk.StackProps {
    * `apps/dashboard/dist/dashboard/browser`; solo se sube si existe al sintetizar.
    */
   dashboardDistDir?: string;
+
+  /**
+   * Postgres EXTERNO para la réplica analítica (p. ej. la base `magicode` en la caja
+   * CoolfixCore, `db-core.coolfix.com.bo`, TLS). Nombre del secreto JSON
+   * {host,port,username,password,dbname}. Con él, proyector y migrador van FUERA de la VPC
+   * (necesitan internet para llegar al host) y usan ese secreto en vez del de la RDS.
+   */
+  externalDbSecretName?: string;
 }
 
 /**
@@ -100,6 +114,7 @@ export class MagicodeStack extends cdk.Stack {
     const prefix   = `magicode-${env}`;
     const repoRoot = path.join(__dirname, '..', '..');
     const deployMock = props.deployMock ?? true;
+    const demoOpenAccess = (props.demoOpenAccess ?? true) && !isProd && deployMock;
 
     if (!deployMock && !props.magihubBaseUrl) {
       throw new Error('deployMock=false requiere el contexto magihubBaseUrl (MagiHub real).');
@@ -206,7 +221,13 @@ export class MagicodeStack extends cdk.Stack {
       cloudwatchLogsExports: ['postgresql'],
       cloudwatchLogsRetention: logs.RetentionDays.TWO_WEEKS,
     });
-    const dbSecret = db.secret!;
+    const rdsSecret = db.secret!;
+
+    // Réplica analítica efectiva: Postgres externo (si se configuró) o la RDS de este stack.
+    const externalDb = props.externalDbSecretName
+      ? secretsmanager.Secret.fromSecretNameV2(this, 'ExternalDbSecret', props.externalDbSecretName)
+      : undefined;
+    const dbSecret: secretsmanager.ISecret = externalDb ?? rdsSecret;
 
     // ── Config común de las Lambdas ─────────────────────────────────────────────
     const lambdaCommon: Partial<NodejsFunctionProps> = {
@@ -228,7 +249,8 @@ export class MagicodeStack extends cdk.Stack {
         externalModules: ['@aws-sdk/*', 'pg-native'],
       },
     };
-    const vpcCommon: Partial<NodejsFunctionProps> = {
+    // Con Postgres externo, proyector y migrador no van en VPC (sin NAT no habría salida).
+    const vpcCommon: Partial<NodejsFunctionProps> = externalDb ? {} : {
       vpc,
       vpcSubnets:     isolatedSubnets,
       securityGroups: [lambdaSg],
@@ -329,6 +351,7 @@ export class MagicodeStack extends cdk.Stack {
         CORS_ORIGINS:     corsOrigins.join(','),
         MAGIHUB_BASE_URL: magihubBaseUrl,
         MAGIHUB_MODE:     magihubMode,
+        ...(demoOpenAccess ? { DEMO_OPEN_ACCESS: 'true', DEMO_API_KEY: 'mh_demo_walter' } : {}),
         // Scoring XGBoost (SageMaker Serverless, MagicodeMlStack opcional). Siempre se
         // fijan: si el endpoint no existe, la API cae a la heurística local.
         SCORING_SURVIVAL_ENDPOINT: `${prefix}-survival`,
@@ -358,7 +381,7 @@ export class MagicodeStack extends cdk.Stack {
       apiName: `${prefix}-api`,
       corsPreflight: {
         allowOrigins: corsOrigins,
-        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.OPTIONS],
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.PUT, CorsHttpMethod.PATCH, CorsHttpMethod.DELETE, CorsHttpMethod.OPTIONS],
         allowHeaders: ['authorization', 'content-type'],
         maxAge:       cdk.Duration.hours(1),
       },
@@ -408,7 +431,7 @@ export class MagicodeStack extends cdk.Stack {
     });
     const projectorFn = makeFn('ProjectorFn', 'projector', {
       ...vpcCommon,
-      description: 'Proyector DynamoDB stream → RDS PostgreSQL',
+      description: externalDb ? 'Proyector DynamoDB stream → PostgreSQL externo' : 'Proyector DynamoDB stream → RDS PostgreSQL',
       entry:       path.join(repoRoot, 'apps/api/src/projector.ts'),
       timeout:     cdk.Duration.seconds(60),
       environment: { ...baseEnv, DB_SECRET_ARN: dbSecret.secretArn },
@@ -491,7 +514,7 @@ export class MagicodeStack extends cdk.Stack {
     dbSecret.grantRead(migratorFn);
     new triggers.Trigger(this, 'MigratorTrigger', {
       handler:                migratorFn,
-      executeAfter:           [db, dbSecret, dbSg, secretsEndpoint],
+      executeAfter:           externalDb ? [] : [db, rdsSecret, dbSg, secretsEndpoint],
       executeOnHandlerChange: true,
       timeout:                cdk.Duration.minutes(3),
     });
@@ -508,6 +531,7 @@ export class MagicodeStack extends cdk.Stack {
     dashboardSources.push(s3deploy.Source.jsonData('config.json', {
       apiUrl:      api.apiEndpoint,
       environment: env,
+      demoMode:    demoOpenAccess, // el dashboard entra sin pedir API key
     }));
     new s3deploy.BucketDeployment(this, 'DashboardDeployment', {
       destinationBucket: dashboardBucket,
@@ -532,8 +556,8 @@ export class MagicodeStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DistributionId',  { value: distribution.distributionId });
     new cdk.CfnOutput(this, 'TableName',       { value: table.tableName });
     new cdk.CfnOutput(this, 'TableStreamArn',  { value: table.tableStreamArn! });
-    new cdk.CfnOutput(this, 'DbEndpoint',      { value: db.dbInstanceEndpointAddress });
-    new cdk.CfnOutput(this, 'DbSecretArn',     { value: dbSecret.secretArn });
+    new cdk.CfnOutput(this, 'DbEndpoint',      { value: db.dbInstanceEndpointAddress, description: 'RDS de este stack' });
+    new cdk.CfnOutput(this, 'DbSecretArn',     { value: dbSecret.secretArn, description: externalDb ? 'Postgres externo en uso' : 'RDS en uso' });
     new cdk.CfnOutput(this, 'VpcId',           { value: vpc.vpcId });
   }
 }

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Provenance } from './provenance.js';
+import { Criticality } from './scoring.js';
 
 /**
  * Multitenant enlazado: todo cuelga de un tenant (derivado de la API key) y se enlaza así:
@@ -177,10 +178,24 @@ export const TaskListItem = z.object({
   sessions: z.number(),
   commits: z.number(),
   pull_requests: z.array(z.object({ number: z.number(), state: z.string(), url: z.string() })),
+  /**
+   * Tokens de la tarea, MISMO método que ProductivitySummary.tokens.total con ?task_key:
+   * snapshots de la API de consumo (UsageSnapshot) de cada key, imputados a las peticiones de las
+   * sesiones enlazadas (por request_id; con granularidad hora/día, prorrateo de cada ventana por el
+   * usage reportado ⇒ estimated). Sin snapshots ⇒ Σ usage reportado (estimated). Mock ⇒ simulated.
+   * Diferencias de alcance: aquí todas las keys del tenant y todo el historial; el summary solo la
+   * key del caller y la ventana [from, to]. Ver docs/kb/tareas-y-ramas.md.
+   */
   tokens: z.object({ value: z.number().nullable(), provenance: Provenance }),
+  /** líneas agregadas NO triviales aceptadas (misma unidad que el embudo, metrics-model §2.5) */
   accepted_lines: z.number(),
   effective_lines: z.number(),
-  deployed: z.boolean(), // algún commit de la tarea tiene deployment success
+  /**
+   * algún commit de la tarea tiene un Deployment success de su SHA, o del merge_sha/head_sha de un
+   * PR cuya rama origen contiene el commit (Commit.branch / remote_branch) — misma regla que la
+   * etapa `deployed` del embudo.
+   */
+  deployed: z.boolean(),
   updated_at: z.string(),
 });
 export type TaskListItem = z.infer<typeof TaskListItem>;
@@ -196,3 +211,98 @@ export const BranchListItem = z.object({
   last_activity_at: z.string(),
 });
 export type BranchListItem = z.infer<typeof BranchListItem>;
+
+export const PullRequestState = z.enum(['open', 'closed', 'merged']);
+export type PullRequestState = z.infer<typeof PullRequestState>;
+
+/** Fila de GET /pull-requests (data[]) y de TaskDetail.linked.pull_requests. */
+export const PullRequestListItem = z.object({
+  repository: z.string(),
+  number: z.number().int(),
+  state: PullRequestState,
+  source_branch: z.string(),
+  target_branch: z.string(),
+  task_keys: z.array(z.string()),
+  head_sha: z.string(),
+  merge_sha: z.string().nullable(),
+  url: z.string(),
+  opened_at: z.string().nullable(),
+  merged_at: z.string().nullable(),
+  closed_at: z.string().nullable(),
+  updated_at: z.string(),
+  ai: z.object({
+    /** commits del PR conocidos (rama origen + head + merge) */
+    commits: z.number(),
+    commits_with_ai: z.number(),
+    ai_matched_lines: z.number(),
+    commit_added_lines: z.number(),
+    contains_ai_lines: z.boolean(),
+    /** cruce por rama/SHA, no por ancestros reales del merge ⇒ estimated */
+    provenance: Provenance,
+  }),
+});
+export type PullRequestListItem = z.infer<typeof PullRequestListItem>;
+
+/**
+ * `meta` de GET /pull-requests: totales HISTÓRICOS (sin ventana de tiempo) del alcance
+ * project_id/repository, calculados ANTES del filtro `state`. No confundir con
+ * ProductivitySummary.counts.pull_requests, que cuenta PRs con actividad en [from, to].
+ */
+export const PullRequestTotals = z.object({
+  total: z.number(),
+  open: z.number(),
+  merged: z.number(),
+  closed: z.number(),
+  with_ai_lines: z.number(),
+});
+export type PullRequestTotals = z.infer<typeof PullRequestTotals>;
+
+export const TaskSessionView = z.object({
+  session_id: z.string(),
+  repository: z.string().nullable(),
+  branch: z.string().nullable(),
+  started_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+});
+export type TaskSessionView = z.infer<typeof TaskSessionView>;
+
+export const TaskCommitView = z.object({
+  sha: z.string(),
+  repository: z.string(),
+  branch: z.string().nullable(),
+  committed_at: z.string().nullable(),
+  verified_remote: z.boolean(),
+  commit_source: z.string().nullable(),
+  session_id: z.string().nullable(),
+  /** null = commit "solo remoto" (el IDE no lo reportó): sin cruce de hashes, desconocido (no 0) */
+  ai_matched_lines: z.number().nullable(),
+  commit_added_lines: z.number().nullable(),
+  ai_share: z.number().nullable(),
+});
+export type TaskCommitView = z.infer<typeof TaskCommitView>;
+
+/** Evidencia de despliegue cruda enlazada a la tarea (TaskLink kind=deployment). */
+export const TaskDeploymentView = z.object({
+  deployment_id: z.string(),
+  repository: z.string().nullable(),
+  sha: z.string().nullable(),
+  environment: z.string().nullable(),
+  state: z.string().nullable(),
+  deployed: z.boolean(),
+  url: z.string().nullable(),
+});
+export type TaskDeploymentView = z.infer<typeof TaskDeploymentView>;
+
+/** GET /tasks/:taskKey — la tarea + todo lo enlazado. */
+export const TaskDetail = TaskListItem.extend({
+  linked: z.object({
+    sessions: z.array(TaskSessionView),
+    commits: z.array(TaskCommitView),
+    branches: z.array(BranchListItem),
+    pull_requests: z.array(PullRequestListItem),
+    deployments: z.array(TaskDeploymentView),
+  }),
+  /** máxima criticidad de los cambios de la tarea (scores), si existe */
+  criticality: Criticality.nullable(),
+});
+export type TaskDetail = z.infer<typeof TaskDetail>;

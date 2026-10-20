@@ -23,7 +23,15 @@ export interface AppConfig {
     keysSelfPath: string;
     timeoutMs: number;
   };
-  auth: { cacheTtlSeconds: number };
+  auth: {
+    cacheTtlSeconds: number;
+    /**
+     * Modo demo de acceso abierto: sin `Authorization`, la petición actúa con `demoApiKey`
+     * (tenant/key de demo). Solo para la demo; nunca se habilita en producción.
+     */
+    demoOpenAccess: boolean;
+    demoApiKey?: string;
+  };
   usage: { staleSeconds: number; maxWindowDays: number };
   /** secreto RDS (JSON {host,port,username,password,dbname}) — solo projector/migrator */
   dbSecretArn?: string;
@@ -64,7 +72,11 @@ class Config {
         keysSelfPath: e.MAGIHUB_KEYS_SELF_PATH || '/v1/keys/self',
         timeoutMs: Number(e.MAGIHUB_TIMEOUT_MS || 5000),
       },
-      auth: { cacheTtlSeconds: Number(e.AUTH_CACHE_TTL_SECONDS || 300) },
+      auth: {
+        cacheTtlSeconds: Number(e.AUTH_CACHE_TTL_SECONDS || 300),
+        demoOpenAccess: e.DEMO_OPEN_ACCESS === 'true' && env !== Environment.PRODUCTION && !!e.DEMO_API_KEY,
+        demoApiKey: e.DEMO_API_KEY || undefined,
+      },
       usage: {
         staleSeconds: Number(e.USAGE_STALE_SECONDS || 300),
         maxWindowDays: Number(e.USAGE_MAX_WINDOW_DAYS || 90),

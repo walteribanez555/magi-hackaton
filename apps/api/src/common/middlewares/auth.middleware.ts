@@ -43,7 +43,13 @@ export interface AuthDeps {
  */
 export const createAuthMiddleware = (deps: AuthDeps = {}) =>
   createMiddleware<AppEnv>(async (c, next) => {
-    const apiKey = readBearer(c.req.header('authorization'));
+    const { demoOpenAccess, demoApiKey } = config.getValue('auth');
+    let apiKey = readBearer(c.req.header('authorization'));
+    // Modo demo: sin header, se usa la key de demo configurada (el dashboard entra sin login).
+    if (!apiKey && demoOpenAccess && demoApiKey) {
+      apiKey = demoApiKey;
+      c.header('x-magicode-demo', 'true');
+    }
     if (!apiKey) throw new UnauthorizedException('Falta Authorization: Bearer <MagiHub API key>', 'MISSING_API_KEY');
 
     const now = deps.now?.() ?? Date.now();

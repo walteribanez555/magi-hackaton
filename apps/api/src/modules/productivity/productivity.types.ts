@@ -6,7 +6,7 @@ import type {
   DataSource,
   FileChange,
   Provenance,
-  ProductivitySummary,
+  SummaryScope,
   TokenUsage,
   UsageGranularity,
   UsageRecord,
@@ -16,10 +16,9 @@ import type {
 export type ChangeStatus = ChangeListItem['status'];
 export type EventSource = 'ide-extension' | 'demo-seed';
 
-/** Atributos comunes a toda entidad (keys.ts). */
-/** `SummaryScope` en contracts solo exporta el schema; el tipo se toma de ProductivitySummary. */
-export type SummaryScope = ProductivitySummary['scope'];
+export type { SummaryScope };
 
+/** Atributos comunes a toda entidad (keys.ts). */
 export interface BaseItem {
   PK: string;
   SK: string;
@@ -46,6 +45,9 @@ export interface SessionItem extends BaseItem {
   head_sha?: string;
   source: EventSource;
   event_count?: number;
+  /** identidad MagiHub de la key (sha256(key)[:12] y nombre) — nunca la key */
+  key_fingerprint?: string;
+  key_name?: string;
   GSI1PK?: string;
   GSI1SK?: string;
 }
@@ -118,6 +120,12 @@ export interface CommitItem extends BaseItem {
   reference_tags?: string[];
   occurred_at: string;
   source?: EventSource;
+  /** los escribe el webhook push (la proyección del IDE no los pisa) */
+  verified_remote?: boolean;
+  remote_branch?: string;
+  remote_only?: boolean;
+  /** el IDE reportó el commit (después del push si remote_only = true) */
+  ide_reported_at?: string;
 }
 
 export interface ReferenceMark {
@@ -149,12 +157,23 @@ export interface DeploymentEvidence {
   updated_at?: string;
 }
 
+/** PullRequest mínimo para la regla de despliegue (merge/head del PR de la rama del commit). */
+export interface PullRequestRef {
+  repository: string;
+  number?: number;
+  source_branch?: string | null;
+  merge_sha?: string | null;
+  head_sha?: string | null;
+}
+
 /** Consumo MagiHub ya leído de los snapshots para la ventana. */
 export interface UsageInput {
   records: UsageRecord[];
   granularity: UsageGranularity;
   provenance: Provenance;
   source: DataSource;
+  /** retraso de ingesta que informa MagiHub (aviso usage_ingestion_delay) */
+  ingestion_delay_minutes?: number;
 }
 
 /** Entrada pura del cálculo de métricas (productivity.metrics.ts). Arrays ya filtrados por ventana/scope. */
@@ -173,6 +192,8 @@ export interface MetricsInput {
   commits: CommitItem[];
   references: ReferenceMark[];
   deployments: DeploymentEvidence[];
+  /** PRs de los repos de los commits (regla de despliegue por merge_sha/head_sha) */
+  pullRequests?: PullRequestRef[];
   external?: { pull_requests: number; pull_requests_merged: number; tasks: number; tasks_done: number };
   now: string;
 }

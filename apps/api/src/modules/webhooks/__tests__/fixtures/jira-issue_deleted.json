@@ -1,6 +1,6 @@
 {
   "timestamp": 1760970000000,
   "webhookEvent": "jira:issue_deleted",
-  "user": { "accountId": "5b10ac8d82e05b22cc7d4ef5" },
+  "user": { "accountId": "fake-account-ana-0001" },
   "issue": { "id": "10003", "key": "MAG-200", "fields": { "summary": "Obsolete", "status": { "name": "Por hacer", "statusCategory": { "key": "new" } } } }
 }

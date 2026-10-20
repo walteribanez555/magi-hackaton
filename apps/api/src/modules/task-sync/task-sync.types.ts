@@ -65,6 +65,8 @@ export interface PlannedAction {
   idempotency_key: string;
   trigger_ref: string;
   action: TaskAction;
+  /** se encola directamente como `skipped` con este last_error (p. ej. "commit_url desconocido") */
+  skip_reason?: string;
 }
 
 export interface SkippedRule {

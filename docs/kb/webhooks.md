@@ -39,7 +39,7 @@ Eventos soportados y su forma normalizada:
 | GitHub     | `pull_request` (`opened`, `edited`, `closed`, `reopened`, `synchronize`, `ready_for_review`, `converted_to_draft`) | `repo.pull_request` | `number`, `state`, `source_branch`, `target_branch`, `merge_sha`, `head_sha`, `title_task_keys`, `url` |
 | GitHub     | `deployment_status`                                       | `repo.deployment`            | `deployment_id`, `sha`, `environment`, `state`, `url` (evidencia) |
 | Bitbucket  | `repo:push` (ramas y tags)                                | `repo.push` / `repo.tag` / `repo.branch` | igual que GitHub, sin conteo de archivos |
-| Bitbucket  | `pullrequest:created|updated|fulfilled|rejected`          | `repo.pull_request`          | `fulfilled`/`MERGED` → `merged`; `rejected`/`DECLINED`/`SUPERSEDED` → `closed` |
+| Bitbucket  | `pullrequest:created`, `:updated`, `:fulfilled`, `:rejected`          | `repo.pull_request`          | `fulfilled`/`MERGED` → `merged`; `rejected`/`DECLINED`/`SUPERSEDED` → `closed` |
 | Jira Cloud | `jira:issue_created`, `jira:issue_updated`                | `task.upserted`              | `task_key`, `title`, `type`, `status`, `status_category`, `assignee`, `story_points`, `url` |
 | Jira Cloud | `jira:issue_deleted`                                      | `task.deleted`               | `task_key` |
 | todos      | `ping` / `diagnostics:ping`                               | (ping)                       | – |
@@ -115,4 +115,4 @@ No hay `deployment_status`: `counts.deployments_success = 0` y la etapa `deploye
 - Firma: `apps/api/src/modules/webhooks/webhooks.signature.ts`.
 - Adaptadores: `apps/api/src/modules/webhooks/adapters/` (`github.adapter.ts`, `bitbucket.adapter.ts`, `jira.adapter.ts`, `gitlab.adapter.ts`, `linear.adapter.ts`, `common.ts`).
 - Orquestación (lookup, firma, alcance, dedupe): `apps/api/src/modules/webhooks/webhooks.service.ts`; proyección a entidades (Branch, Commit, PullRequest, Deployment, Task, TaskLink): `apps/api/src/modules/webhooks/webhooks.projection.ts`; persistencia: `apps/api/src/modules/webhooks/webhooks.repository.ts`.
-- Integraciones: `apps/api/src/modules/integrations/`. Guía de configuración por proveedor: `docs/integrations.md`.
+- Integraciones: `apps/api/src/modules/integrations/`. Guía de configuración por proveedor: `docs/integrations.md` (pendiente; aún no existe en el repositorio).

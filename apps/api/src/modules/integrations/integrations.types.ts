@@ -1,4 +1,5 @@
 import type { Integration, IntegrationProvider } from '@magicode/contracts';
+import type { PendingTest } from '../integration-health/integration-health.types';
 
 /**
  * Fila `Integration` (PK T#{t} · SK INT#{id}). NUNCA lleva el secreto: es lo que lista el dashboard.
@@ -43,6 +44,10 @@ export interface IntLookupItem {
   service_account_id?: string;
   managed_field_ids?: string[];
   credentials_configured_at?: string;
+  /** id del webhook en el proveedor (register-webhook / descubierto por health) */
+  provider_hook_id?: string;
+  /** prueba de ida y vuelta pendiente (la completa la próxima entrega que encaje) */
+  pending_test?: PendingTest | null;
 }
 
 export interface CallerScope {

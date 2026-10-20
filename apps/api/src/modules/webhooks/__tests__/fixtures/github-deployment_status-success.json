@@ -7,7 +7,7 @@
     "environment": "production",
     "target_url": "",
     "log_url": "https://github.com/acme/shop/actions/runs/998877/job/665544",
-    "environment_url": "https://shop.acme.dev",
+    "environment_url": "https://shop.example.com",
     "created_at": "2026-10-20T19:00:00Z",
     "updated_at": "2026-10-20T19:00:00Z"
   },

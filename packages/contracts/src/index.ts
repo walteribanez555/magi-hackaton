@@ -8,3 +8,4 @@ export * from './api.js';
 export * from './integrations.js';
 export * from './scoring.js';
 export * from './writeback.js';
+export * from './health.js';

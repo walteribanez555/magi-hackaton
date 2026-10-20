@@ -64,7 +64,7 @@ una sola vez aunque dispare varias señales. `redundancy.score = redundant / no_
 | métrica                 | definición                                                                  |
 |-------------------------|------------------------------------------------------------------------------|
 | `mechanical_share`      | % de líneas IA que una herramienta determinista habría generado: `import`, `trivial`, tier `generated` |
-| `ai_share` (commit)     | líneas del commit que coinciden con hashes IA / líneas agregadas del commit |
+| `ai_share` (commit)     | líneas no triviales del commit que coinciden con hashes IA / líneas agregadas no triviales del commit |
 | `ai_lost_lines`         | aceptadas que no llegaron al commit (editadas o borradas por el humano)     |
 | `accepted_as_is` / `edited_before_accept` | si el usuario modificó la propuesta antes de aceptar      |
 
@@ -74,6 +74,14 @@ una sola vez aunque dispare varias señales. `redundancy.score = redundant / no_
 effective_lines = Σ  peso(kind) × peso(tier)
                  líneas aceptadas  ∧ ¬redundante ∧ ¬mecánica
 ```
+
+### 2.5 Unidades
+
+Todas las etapas del embudo desde **Aceptado** cuentan la misma unidad: **líneas agregadas no
+vacías y no triviales** (las triviales — `}`, `);` — no se pueden rastrear por hash porque se
+repiten en todas partes). **Generado** cuenta lo propuesto con el mismo criterio. Así las
+conversiones (`committed / accepted`, `in_reference / accepted`) comparan cosas equivalentes y
+`lost_before_commit = ai_lost_lines / líneas no triviales aceptadas`.
 
 ## 3. KPIs
 

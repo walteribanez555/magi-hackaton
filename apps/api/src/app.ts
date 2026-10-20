@@ -14,6 +14,7 @@ import { integrationsRouter } from './modules/integrations/integrations.module';
 import { tasksRouter } from './modules/tasks/tasks.module';
 import { branchesRouter } from './modules/branches/branches.module';
 import { pullRequestsRouter } from './modules/pull-requests/pull-requests.module';
+import { projectsRouter, repositoriesRouter } from './modules/integration-health/integration-health.module';
 
 export const app = new Hono<AppEnv>();
 
@@ -30,7 +31,7 @@ app.use(
     },
     allowMethods: config.getValue('cors').methods,
     allowHeaders: config.getValue('cors').headers,
-    exposeHeaders: ['x-request-id'],
+    exposeHeaders: ['x-request-id', 'x-magicode-demo'],
     maxAge: 600,
   }),
 );
@@ -70,5 +71,7 @@ v1.route('/integrations', integrationsRouter);
 v1.route('/tasks', tasksRouter);
 v1.route('/branches', branchesRouter);
 v1.route('/pull-requests', pullRequestsRouter);
+v1.route('/projects', projectsRouter);
+v1.route('/repositories', repositoriesRouter);
 
 app.route('/api/v1', v1);

@@ -47,7 +47,12 @@ export const TaskAction = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('remote_link'),
-    url: z.url(),
+    /** URL absoluta, o plantilla que se renderiza a una (p. ej. "{{commit_url}}") */
+    url: z
+      .string()
+      .min(1)
+      .max(2048)
+      .refine((u) => /^https?:\/\//.test(u) || /^\{\{[a-z_]+\}\}/.test(u), 'URL absoluta o plantilla {{…}}'),
     title: z.string().min(1).max(255),
     /** commit | pull_request | deployment | dashboard */
     relation: z.enum(['commit', 'pull_request', 'deployment', 'dashboard']),
@@ -103,8 +108,10 @@ export type RuleTrigger = z.infer<typeof RuleTrigger>;
 
 /**
  * Regla: cuando ocurre `trigger` (y se cumple `when`), encolar `action`.
- * `action` admite plantillas {{task_key}} {{sha}} {{pr_url}} {{environment}} {{tokens}}
- * {{effective_lines}} {{criticality}} {{dashboard_url}} en textos.
+ * `action` admite plantillas en textos y URLs: {{task_key}} {{sha}} {{commit_url}} {{repository}}
+ * {{pr_url}} {{environment}} {{tokens}} {{effective_lines}} {{criticality}} {{dashboard_url}}.
+ * {{commit_url}} se arma desde el remoto del repositorio (GitHub/Bitbucket); si no se conoce, la
+ * acción se marca `skipped` en vez de publicar un enlace roto.
  */
 export const AutomationRule = z.object({
   rule_id: z.string(),
@@ -139,7 +146,7 @@ export const DEFAULT_RULES: AutomationRuleUpsert[] = [
     enabled: true,
     trigger: 'commit.linked',
     when: {},
-    action: { kind: 'remote_link', url: 'https://example.invalid/{{sha}}', title: 'Commit {{sha}} (MagiCode)', relation: 'commit' },
+    action: { kind: 'remote_link', url: '{{commit_url}}', title: 'Commit {{sha}} (MagiCode)', relation: 'commit' },
   },
   {
     name: 'PR abierto → En revisión',

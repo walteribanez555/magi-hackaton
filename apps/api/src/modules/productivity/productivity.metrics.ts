@@ -555,6 +555,7 @@ export function computeSummary(input: MetricsInput): ProductivitySummary {
       tasks_done: input.external?.tasks_done ?? 0,
     },
     by_model,
+    warnings: [],
     generated_at: input.now,
   };
 }

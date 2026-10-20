@@ -11,9 +11,16 @@ import { ChangeScores } from './scoring.js';
 export const FunnelStage = z.enum(['generated', 'accepted', 'committed', 'in_reference', 'deployed']);
 export type FunnelStage = z.infer<typeof FunnelStage>;
 
+/**
+ * Unidad de `lines` en TODAS las etapas (docs/metrics-model.md §2.5): líneas agregadas no vacías y
+ * NO triviales. accepted = Σ (importance.lines − by_kind.trivial); generated = propuestas × (1 −
+ * proporción trivial de lo aceptado en la sesión) ⇒ provenance `estimated` (code.proposed no trae
+ * by_kind); committed/in_reference/deployed = hashes IA no triviales casados en Git.
+ * in_reference/deployed: solo líneas de commits presentes en `included_shas` de la referencia.
+ */
 export const FunnelStep = z.object({
   stage: FunnelStage,
-  lines: Measured, // líneas brutas que llegan a esta etapa
+  lines: Measured, // líneas no triviales que llegan a esta etapa
   effective_lines: Measured, // líneas ponderadas por las 3 aristas
   /** (tokens_total / lines) × 100; null si lines = 0 */
   tokens_per_100_lines: Measured,
@@ -59,7 +66,7 @@ export const DimensionsSummary = z.object({
     ai_share_of_commits: Measured,
     /** % de las líneas IA aceptadas que eran mecánicas */
     mechanical_share: Measured,
-    /** % de líneas IA aceptadas que se perdieron antes del commit */
+    /** ai_lost_lines / líneas NO triviales aceptadas de los cambios commiteados */
     lost_before_commit: Measured,
     accepted_as_is: z.number(),
     edited_before_accept: z.number(),
@@ -78,6 +85,7 @@ export const SummaryScope = z.object({
   from: z.string(),
   to: z.string(),
 });
+export type SummaryScope = z.infer<typeof SummaryScope>;
 
 export const ProductivitySummary = z.object({
   scope: SummaryScope,
@@ -95,17 +103,25 @@ export const ProductivitySummary = z.object({
     changes_rejected: z.number(),
     commits: z.number(),
     references: z.number(),
-    /** desde webhooks del repositorio origen */
+    /**
+     * desde webhooks del repositorio origen: PRs con ACTIVIDAD (último evento) dentro de [from, to].
+     * No es el total histórico: ese es GET /pull-requests → meta.total (PullRequestTotals).
+     */
     pull_requests: z.number(),
+    /** de esos PRs con actividad en la ventana, cuántos están fusionados */
     pull_requests_merged: z.number(),
+    /** Deployments success que cuentan para la etapa `deployed` (SHA del commit o merge/head de su PR) */
     deployments_success: z.number(),
     /** desde el gestor de tareas (Jira) */
     tasks: z.number(),
     tasks_done: z.number(),
   }),
   by_model: z.array(
+    // accepted_lines: no triviales (unidad del embudo)
     z.object({ model: z.string(), requests: z.number(), tokens: Measured, accepted_lines: z.number() }),
   ),
+  /** avisos: proyecto sin webhooks obligatorios, retraso de ingesta, heurística en uso… */
+  warnings: z.array(z.object({ code: z.string(), message: z.string() })).default([]),
   generated_at: z.string(),
 });
 export type ProductivitySummary = z.infer<typeof ProductivitySummary>;
@@ -114,6 +130,7 @@ export const TimelinePoint = z.object({
   bucket_start: z.string(),
   tokens: z.number(),
   tokens_provenance: Provenance,
+  /** líneas NO triviales aceptadas (misma unidad que committed_lines) */
   accepted_lines: z.number(),
   effective_lines: z.number(),
   committed_lines: z.number(),
@@ -129,7 +146,13 @@ export const SessionListItem = z.object({
   started_at: z.string(),
   ended_at: z.string().nullable(),
   ai_requests: z.number(),
+  /**
+   * consumo de la API de MagiHub imputado a la sesión con el mismo método que el summary:
+   * por request_id (real) · prorrateo por ventana hora/día (estimated) · sin API ⇒ Σ reportado
+   * (estimated) · mock ⇒ simulated.
+   */
   tokens: Measured,
+  /** líneas NO triviales aceptadas (unidad del embudo) */
   accepted_lines: z.number(),
   effective_lines: z.number(),
   commits: z.array(z.string()),
@@ -143,6 +166,7 @@ export const ChangeListItem = z.object({
   ai_request_id: z.string(),
   status: z.enum(['proposed', 'accepted', 'rejected', 'committed', 'in_reference']),
   files: z.array(z.object({ path: z.string(), added: z.number(), deleted: z.number() })),
+  /** líneas agregadas no vacías del evento (incluye triviales; el embudo usa las no triviales) */
   accepted_added_lines: z.number(),
   importance_score: z.number(),
   redundancy_score: z.number(),

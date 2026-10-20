@@ -20,3 +20,4 @@ npm-debug.log*
 
 # Lookups de CDK con el id de cuenta (no versionar en repo público)
 infra/cdk.context.json
+infra/cdk.out.*

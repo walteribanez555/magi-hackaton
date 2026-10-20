@@ -48,14 +48,20 @@ export type Criticality = z.infer<typeof Criticality>;
 export const ChangeScores = z.object({
   survival_probability: z.number().min(0).max(1),
   rework_risk: z.number().min(0).max(1),
-  /** combina rework_risk × importancia × tier del archivo (ver docs/kb/criticidad.md) */
+  /** rework_risk^0.7 × exposure^0.3, exposure = 0.5·importancia + 0.5·peso_tier (ver docs/kb/criticidad.md) */
   criticality: Criticality,
   criticality_score: z.number().min(0).max(1),
   /** "xgboost:<version>" o "heuristic:v1" si no hay endpoint */
   model_version: z.string(),
-  /** estimated si es el modelo real entrenado con datos reales; simulated si se entrenó con sintéticos */
+  /**
+   * simulated: modelo entrenado con datos sintéticos · estimated: modelo entrenado con datos reales
+   * o heurística de respaldo (model_version 'heuristic:v1') cuando no hay endpoint.
+   */
   provenance: Provenance,
-  /** top features que más empujaron la predicción (SHAP aprox. / gain), solo nombres + signo */
+  /**
+   * factores que más empujaron la predicción de `rework` (gain × desvío respecto de la mediana),
+   * solo nombres + signo. Puede incluir factores compuestos como `large_untested_core`.
+   */
   top_factors: z.array(z.object({ feature: z.string(), direction: z.enum(['up', 'down']) })).max(5),
 });
 export type ChangeScores = z.infer<typeof ChangeScores>;

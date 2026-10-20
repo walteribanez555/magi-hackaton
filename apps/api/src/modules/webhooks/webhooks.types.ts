@@ -24,7 +24,9 @@ export interface AdapterInput {
 export type AdaptResult =
   | { type: 'events'; events: NormalizedWebhookEvent[] }
   | { type: 'ping' }
-  | { type: 'ignored'; reason: string; self?: boolean };
+  | { type: 'ignored'; reason: string; self?: boolean }
+  /** entrega de PRUEBA (Jira: solo cambió la etiqueta magicode-healthcheck) */
+  | { type: 'test'; task_key: string };
 
 export type Adapter = (input: AdapterInput) => AdaptResult;
 
@@ -33,6 +35,7 @@ export type WebhookOutcome =
   | { status: 200; body: { ok: true; duplicate: true } }
   | { status: 202; body: { ok: true; ignored: true; reason: string } }
   | { status: 200; body: { ok: true; ignored: 'self' } }
+  | { status: 200; body: { ok: true; test: true } }
   | { status: 200; body: { ok: true; processed: number; kinds: string[] } };
 
 export interface WebhookRequest {

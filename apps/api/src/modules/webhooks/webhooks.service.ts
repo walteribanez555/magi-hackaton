@@ -2,12 +2,15 @@ import { createHash } from 'node:crypto';
 import {
   GitProvider,
   IntegrationProvider,
+  keys,
   TaskProvider,
   WEBHOOK_SIGNATURE_HEADERS,
   type NormalizedWebhookEvent,
 } from '@magicode/contracts';
 import { createLogger } from '../../config/logger';
-import { BadRequestException, NotFoundException, UnauthorizedException } from '../../common/exceptions';
+import { BadRequestException, HttpException, NotFoundException, UnauthorizedException } from '../../common/exceptions';
+import { integrationHealthService, type DeliverySignal, type IntegrationHealthService } from '../integration-health/integration-health.service';
+import type { DeliveryOutcome } from '../integration-health/integration-health.types';
 import { integrationsRepository, type IntegrationsRepository } from '../integrations/integrations.repository';
 import type { IntLookupItem } from '../integrations/integrations.types';
 import { adaptWebhook } from './adapters';
@@ -35,7 +38,19 @@ export interface WebhooksServiceDeps {
   repo?: WebhooksRepository;
   projector?: WebhookProjector;
   fireTrigger?: FireTrigger;
+  health?: DeliveryHealth;
   now?: () => Date;
+}
+
+/** Lo que el webhook necesita del módulo de salud (inyectable en tests). */
+export type DeliveryHealth = Pick<IntegrationHealthService, 'recordDelivery' | 'onValidDelivery' | 'onInvalidSignature'>;
+
+/** Resultado de la entrega para la contabilidad de salud. */
+export function outcomeOf(out: WebhookOutcome): DeliveryOutcome {
+  const b = out.body as Record<string, unknown>;
+  if (b.duplicate) return 'duplicate';
+  if (b.ignored) return 'ignored';
+  return 'accepted';
 }
 
 export class WebhooksService {
@@ -44,8 +59,10 @@ export class WebhooksService {
   private readonly projector: WebhookProjector;
   private readonly now: () => Date;
   private readonly fireTrigger: FireTrigger;
+  private readonly health: DeliveryHealth;
 
   constructor(deps: WebhooksServiceDeps = {}) {
+    this.health = deps.health ?? integrationHealthService;
     this.fireTrigger = deps.fireTrigger ?? ((trigger, input) => taskSyncService.fireTrigger(trigger, input));
     this.integrations = deps.integrations ?? integrationsRepository;
     this.repo = deps.repo ?? webhooksRepository;
@@ -66,9 +83,36 @@ export class WebhooksService {
     const provider = parsedProvider.data;
 
     const lookup = /^int_[0-9a-f]{16}$/.test(req.integration_id) ? await this.integrations.getLookup(req.integration_id) : null;
-    if (!lookup || lookup.status === 'disabled') {
-      throw new NotFoundException('Integración no encontrada', 'INTEGRATION_NOT_FOUND');
+    if (!lookup) throw new NotFoundException('Integración no encontrada', 'INTEGRATION_NOT_FOUND');
+
+    // Contabilidad de entregas (sin payloads) contra la integración de la URL — también las rechazadas.
+    const at = this.now();
+    const headerEvent = req.headers[WEBHOOK_SIGNATURE_HEADERS[provider].event];
+    try {
+      const { out, signal } = await this.process(provider, lookup, req, at);
+      await this.health.recordDelivery(lookup, outcomeOf(out), { at: signal.at, event: signal.event });
+      await this.health.onValidDelivery(lookup, signal);
+      return out;
+    } catch (err) {
+      const badSignature = err instanceof HttpException && err.code === 'INVALID_SIGNATURE';
+      const message = err instanceof HttpException ? `${err.statusCode} ${err.code ?? ''} ${err.message}`.trim() : 'error interno al procesar la entrega';
+      await this.health.recordDelivery(lookup, badSignature ? 'rejected_signature' : 'rejected_other', {
+        at: at.toISOString(),
+        ...(headerEvent ? { event: headerEvent } : {}),
+        error: message,
+      });
+      if (badSignature) await this.health.onInvalidSignature(lookup, at.toISOString());
+      throw err;
     }
+  }
+
+  private async process(
+    provider: IntegrationProvider,
+    lookup: IntLookupItem,
+    req: WebhookRequest,
+    at: Date,
+  ): Promise<{ out: WebhookOutcome; signal: DeliverySignal }> {
+    if (lookup.status === 'disabled') throw new NotFoundException('Integración deshabilitada', 'INTEGRATION_NOT_FOUND');
     if (lookup.provider !== provider) {
       throw new BadRequestException('El proveedor no coincide con la integración', 'PROVIDER_MISMATCH');
     }
@@ -87,10 +131,14 @@ export class WebhooksService {
       throw new BadRequestException('El cuerpo no es JSON válido (configura Content type: application/json)', 'INVALID_JSON');
     }
 
-    const at = this.now();
     const receivedAt = at.toISOString();
     const deliveryId = deliveryIdOf(provider, req.headers, req.raw_body);
     const event = req.headers[WEBHOOK_SIGNATURE_HEADERS[provider].event];
+    const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    // nombre del evento para last_event_at: Jira lo trae en el cuerpo; GitLab también (object_kind)
+    const eventName =
+      provider === 'jira' ? String(p.webhookEvent ?? event ?? 'jira') : provider === 'gitlab' ? String(p.object_kind ?? event ?? 'gitlab') : (event ?? provider);
+    const signal = (o: Partial<DeliverySignal> = {}): DeliverySignal => ({ at: receivedAt, event: eventName, ping: false, kinds: [], jira_test: false, ...o });
 
     const adapted = adaptWebhook(provider, {
       event,
@@ -109,24 +157,31 @@ export class WebhooksService {
     if (adapted.type === 'ping') {
       await this.integrations.markDelivery(lookup.tenant_id, lookup.integration_id, receivedAt);
       log.info('Webhook ping', { delivery_id: deliveryId });
-      return { status: 200, body: { ok: true, ping: true } };
+      return { out: { status: 200, body: { ok: true, ping: true } }, signal: signal({ ping: true }) };
+    }
+    if (adapted.type === 'test') {
+      // prueba de ida y vuelta de Jira (etiqueta magicode-healthcheck): no es un cambio real de la tarea
+      await this.repo.update(keys.task(lookup.tenant_id, adapted.task_key), { set: { updated_at: receivedAt } }, { expression: 'attribute_exists(PK)' });
+      await this.integrations.markDelivery(lookup.tenant_id, lookup.integration_id, receivedAt);
+      log.info('Entrega de prueba (healthcheck)', { delivery_id: deliveryId });
+      return { out: { status: 200, body: { ok: true, test: true } }, signal: signal({ jira_test: true }) };
     }
     if (adapted.type === 'ignored' && adapted.self) {
       // eco de nuestro propio write-back (anti-bucle): 200 para que Jira no lo marque como fallo
       await this.integrations.markDelivery(lookup.tenant_id, lookup.integration_id, receivedAt);
       log.info('Webhook propio ignorado (anti-bucle)', { delivery_id: deliveryId });
-      return { status: 200, body: { ok: true, ignored: 'self' } };
+      return { out: { status: 200, body: { ok: true, ignored: 'self' } }, signal: signal() };
     }
     if (adapted.type === 'ignored') {
       await this.integrations.markDelivery(lookup.tenant_id, lookup.integration_id, receivedAt);
       log.info('Webhook ignorado', { delivery_id: deliveryId, event, reason: adapted.reason });
-      return { status: 202, body: { ok: true, ignored: true, reason: adapted.reason } };
+      return { out: { status: 202, body: { ok: true, ignored: true, reason: adapted.reason } }, signal: signal() };
     }
 
     const { accepted, rejectedReason } = this.scope(adapted.events, lookup);
     if (!accepted.length) {
       log.info('Webhook fuera del alcance de la integración', { delivery_id: deliveryId, reason: rejectedReason });
-      return { status: 202, body: { ok: true, ignored: true, reason: rejectedReason ?? 'out of scope' } };
+      return { out: { status: 202, body: { ok: true, ignored: true, reason: rejectedReason ?? 'out of scope' } }, signal: signal() };
     }
 
     const deliveryKey = `${provider}:${deliveryId}`;
@@ -142,7 +197,7 @@ export class WebhooksService {
     });
     if (!fresh) {
       log.info('Webhook duplicado', { delivery_id: deliveryId });
-      return { status: 200, body: { ok: true, duplicate: true } };
+      return { out: { status: 200, body: { ok: true, duplicate: true } }, signal: signal({ kinds }) };
     }
 
     const ctx: ProjectionContext = {
@@ -168,7 +223,7 @@ export class WebhooksService {
         task_keys: [...new Set(results.flatMap((r) => r.task_keys))].slice(0, 20),
         notes: results.map((r) => r.note).filter(Boolean),
       });
-      return { status: 200, body: { ok: true, processed: accepted.length, kinds } };
+      return { out: { status: 200, body: { ok: true, processed: accepted.length, kinds } }, signal: signal({ kinds }) };
     } catch (err) {
       // se libera el dedupe para que el reintento del proveedor vuelva a intentarlo
       await this.repo.deleteDelivery(lookup.tenant_id, deliveryKey).catch(() => undefined);

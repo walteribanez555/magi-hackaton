@@ -27,6 +27,10 @@ const main = new MagicodeStack(app, `MagicodeStack-${environment}`, {
   environment,
   deployMock,
   magihubBaseUrl,
+  // `-c demoOpenAccess=false` exige API key también en dev
+  demoOpenAccess: String(app.node.tryGetContext('demoOpenAccess') ?? 'true') === 'true',
+  // `-c externalDbSecretName=magicode/dev/db-core` → réplica en la caja CoolfixCore (Postgres 14)
+  externalDbSecretName: app.node.tryGetContext('externalDbSecretName') || undefined,
   description: `MagiCode (${environment}): API + proyector Dynamo→RDS + dashboard + MagiHub mock`,
 });
 

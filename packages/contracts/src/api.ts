@@ -36,6 +36,15 @@ export const ROUTES = {
   integrationCredentials: '/integrations/:integrationId/credentials', // PUT TaskProviderCredentials → 204 (Secrets Manager)
   integrationRules: '/integrations/:integrationId/rules', // GET AutomationRule[] · POST AutomationRuleUpsert
   integrationRule: '/integrations/:integrationId/rules/:ruleId', // PUT · DELETE
+
+  // Salud de integraciones (health.ts) — repositorio y tareas son OBLIGATORIOS por proyecto
+  projectReadiness: '/projects/:projectId/readiness', // GET → ProjectReadiness (todos sus repos)
+  repositories: '/repositories', // GET ?project_id → RepositoryOption[] (lista desplegable)
+  repositoryReadiness: '/repositories/:repository/readiness', // GET → RepositoryReadiness (repository URL-encoded "org%2Frepo")
+  integrationHealth: '/integrations/:integrationId/health', // GET → IntegrationHealth (?refresh=true consulta al proveedor)
+  integrationTest: '/integrations/:integrationId/test', // POST IntegrationTestRequest → 202 IntegrationTestRun
+  integrationTestRun: '/integrations/:integrationId/tests/:testId', // GET → IntegrationTestRun
+  integrationRegisterWebhook: '/integrations/:integrationId/register-webhook', // POST → RegisterWebhookResult
 } as const;
 
 /** Headers de firma por proveedor (verificación HMAC-SHA256 con el secreto de la integración). */

@@ -32,7 +32,7 @@ npm test
 docker compose up -d   # dynamodb-local + postgres
 ```
 
-Detalles por parte en el README de cada carpeta. Modelo de métricas: [`docs/metrics-model.md`](docs/metrics-model.md).
+Detalles por parte en el README de cada carpeta. Modelo de métricas: [`docs/metrics-model.md`](docs/metrics-model.md). **Rutas del backend:** [`docs/api-routes.md`](docs/api-routes.md).
 
 ## Honestidad de datos
 

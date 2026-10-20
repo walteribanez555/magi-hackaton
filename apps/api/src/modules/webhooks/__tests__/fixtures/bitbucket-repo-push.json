@@ -24,7 +24,7 @@
             "hash": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
             "date": "2026-10-20T12:00:00+00:00",
             "message": "PAY-7 refunds endpoint\n\nMagiCode-Session: sess_bb1\n",
-            "author": { "raw": "Ana Dev <ana@acme.dev>", "user": { "nickname": "anadev", "display_name": "Ana Dev" } }
+            "author": { "raw": "Ana Dev <ana@example.com>", "user": { "nickname": "anadev", "display_name": "Ana Dev" } }
           }
         ]
       },

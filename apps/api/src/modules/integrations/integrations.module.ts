@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import type { AppEnv } from '../../app.types';
 import { handleException } from '../../common/exceptions';
+import { integrationHealthRouter } from '../integration-health/integration-health.module';
 import { taskSyncService } from '../task-sync/task-sync.service';
 import { integrationsService } from './integrations.service';
 
@@ -16,6 +17,7 @@ import { integrationsService } from './integrations.service';
  *   POST   /:integrationId/rules         AutomationRuleUpsert → 201 { data: AutomationRule }
  *   PUT    /:integrationId/rules/:ruleId AutomationRuleUpsert → { data: AutomationRule }
  *   DELETE /:integrationId/rules/:ruleId → 204
+ * Salud (integration-health.module): GET /:id/health · POST /:id/register-webhook · POST /:id/test · GET /:id/tests/:testId
  */
 export const integrationsRouter = new Hono<AppEnv>();
 
@@ -113,3 +115,6 @@ integrationsRouter.delete('/:integrationId/rules/:ruleId', async (c) => {
     return handleException(err, c);
   }
 });
+
+// Salud, registro del webhook y pruebas de ida y vuelta (mismo prefijo /integrations)
+integrationsRouter.route('/', integrationHealthRouter);

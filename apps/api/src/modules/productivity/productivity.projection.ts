@@ -1,6 +1,9 @@
 import type { TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
-import { ENTITY, extractTaskKeys, keys, type ProductivityEvent, type Provenance } from '@magicode/contracts';
+import { ENTITY, extractTaskKeys, keys, type ProductivityEvent, type Provenance, type RuleTrigger } from '@magicode/contracts';
 import { buildUpdate, type UpdateSpec } from '../../common/utils/dynamo-expr';
+import { commitUrlFromRemote } from '../task-sync/rules.engine';
+import type { TriggerInput } from '../task-sync/task-sync.types';
+import { filterTaskKeys } from '../webhooks/webhooks.projection';
 import type { ChangeStatus } from './productivity.types';
 
 /**
@@ -16,12 +19,31 @@ export interface ProjectionContext {
   key_id: string;
   table: string;
   now: string;
+  /** identidad de la key (Session.key_fingerprint / key_name → integration-health api_keys) */
+  key_fingerprint?: string;
+  key_name?: string;
+  /** prefijos Jira/Linear del proyecto (task_project_keys); null/[] ⇒ denylist NOISE_PREFIXES */
+  task_prefixes?: string[] | null;
+}
+
+/** Lo que se sabe de un commit ya escrito (Dynamo o lote). */
+export interface PreCommit {
+  session_id: string;
+  change_ids: string[];
+  task_keys?: string[];
+  remote_url?: string;
 }
 
 /** Estado previo leído de Dynamo (o de la caché local del lote). Claves: `${session}|${change}` y `${repo}|${sha}`. */
 export interface PreState {
   changes: Map<string, ChangeStatus>;
-  commits: Map<string, { session_id: string; change_ids: string[] }>;
+  commits: Map<string, PreCommit>;
+}
+
+/** Disparo de reglas de write-back (task-sync fireTrigger) que genera el evento. */
+export interface ProjectionTrigger {
+  trigger: RuleTrigger;
+  input: TriggerInput;
 }
 
 export interface Projection {
@@ -29,6 +51,10 @@ export interface Projection {
   linked: TransactItem[];
   /** nuevos estados de cambios (para actualizar la caché del lote tras escribir) */
   changeStatuses: Array<{ key: string; status: ChangeStatus }>;
+  /** commit escrito por git.committed (para la caché del lote) */
+  commit?: { key: string; value: PreCommit };
+  /** reglas a disparar DESPUÉS de escribir (commit.linked, session.started, reference.marked) */
+  triggers: ProjectionTrigger[];
 }
 
 export const changeRef = (session: string, change: string) => `${session}|${change}`;
@@ -87,11 +113,22 @@ export function eventBranch(ev: ProductivityEvent): string | undefined {
   return ev.branch;
 }
 
-/** Tareas del evento: envelope.task_key + claves inferidas de la rama. */
-export function eventTaskKeys(ev: ProductivityEvent): string[] {
+/**
+ * Tareas del evento: envelope.task_key + claves inferidas de la rama, con el MISMO filtro que los
+ * webhooks (filterTaskKeys): prefijos Jira/Linear del proyecto si hay, si no denylist de ruido
+ * (UTF, ISO, SHA, HTTP…) ⇒ `fix/utf-8` no crea la tarea UTF-8.
+ */
+export function eventTaskKeys(ev: ProductivityEvent, prefixes: string[] | null = null): string[] {
+  const raw = [...(ev.task_key ? [ev.task_key] : []), ...extractTaskKeys(eventBranch(ev))];
   // tope de 5 para acotar el tamaño de la transacción
-  return [...new Set([...(ev.task_key ? [ev.task_key] : []), ...extractTaskKeys(eventBranch(ev))])].slice(0, 5);
+  return filterTaskKeys(raw, prefixes).slice(0, 5);
 }
+
+const union = (...lists: Array<Iterable<string> | undefined>): string[] => {
+  const out = new Set<string>();
+  for (const l of lists) for (const x of l ?? []) out.add(x);
+  return [...out];
+};
 
 // ── Proyección ───────────────────────────────────────────────────────────────
 
@@ -100,12 +137,16 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
   const prov = eventProvenance(ev);
   const occ = ev.occurred_at;
   const branch = eventBranch(ev);
-  const taskKeys = eventTaskKeys(ev);
-  const primaryTask = ev.task_key ?? taskKeys[0];
+  const prefixes = ctx.task_prefixes ?? null;
+  const taskKeys = eventTaskKeys(ev, prefixes);
+  const primaryTask = taskKeys[0];
   const base = { tenant_id: t, key_id, provenance: prov };
   const core: TransactItem[] = [];
   const linked: TransactItem[] = [];
   const changeStatuses: Projection['changeStatuses'] = [];
+  const triggers: ProjectionTrigger[] = [];
+  let commitOut: Projection['commit'];
+  const identity = { key_fingerprint: ctx.key_fingerprint, key_name: ctx.key_name };
 
   // 0) dedupe — DEBE ser el primer elemento (se identifica por índice al cancelar la transacción)
   core.push({
@@ -172,17 +213,32 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
           source: ev.source,
           last_activity_at: occ,
           updated_at: now,
+          ...identity,
         },
         setIfNotExists: { created_at: now },
         add: { event_count: 1 },
       }),
     );
+    if (taskKeys.length) {
+      const sha = ev.payload.head_sha?.toLowerCase();
+      triggers.push({
+        trigger: 'session.started',
+        input: {
+          tenant_id: t,
+          project_id: ev.project_id,
+          task_keys: taskKeys,
+          ref: `session:${ev.session_id}`,
+          vars: { repository: ev.repository, ...(sha ? { sha } : {}) },
+        },
+      });
+    }
   } else {
     core.push(
       update(table, sessionKey, {
         set: {
           last_activity_at: occ,
           updated_at: now,
+          ...identity,
           ...(ev.event_type === 'session.ended' ? { ended_at: occ, end_reason: ev.payload.reason } : {}),
         },
         setIfNotExists: {
@@ -368,20 +424,26 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
 
     case 'git.committed': {
       const p = ev.payload;
-      core.push({
-        Put: {
-          TableName: table,
-          Item: {
-            ...keys.commit(t, ev.repository, p.sha.toLowerCase()),
+      const sha = p.sha.toLowerCase();
+      const ref = commitRef(ev.repository, sha);
+      const prev = pre.commits.get(ref);
+      const remoteUrl = sanitizeRemoteUrl(p.remote_url) ?? prev?.remote_url;
+      // claves del IDE ∪ las que ya escribió el push (mensaje/rama), filtradas igual
+      const commitKeys = filterTaskKeys(union(taskKeys, prev?.task_keys), prefixes);
+      // UpdateItem (no Put): solo campos del IDE; verified_remote / remote_* / remote_only /
+      // reference_tags del webhook push o de reference.marked se conservan.
+      core.push(
+        update(table, keys.commit(t, ev.repository, sha), {
+          set: {
             ...keys.commitGsi1(t, ev.session_id, p.committed_at),
             entity: ENTITY.commit,
             ...base,
-            sha: p.sha.toLowerCase(),
+            sha,
             repository: ev.repository,
             session_id: ev.session_id,
             project_id: ev.project_id,
             branch,
-            task_keys: taskKeys.length ? taskKeys : undefined,
+            task_keys: commitKeys.length ? commitKeys : undefined,
             parent_sha: p.parent_sha,
             committed_at: p.committed_at,
             files: p.files,
@@ -392,18 +454,33 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
             commit_source: p.source,
             occurred_at: occ,
             source: ev.source,
-            created_at: now,
+            ide_reported_at: now,
             updated_at: now,
           },
-        },
-      });
+          setIfNotExists: { created_at: now },
+        }),
+      );
+      commitOut = { key: ref, value: { session_id: ev.session_id, change_ids: p.change_ids, task_keys: commitKeys, remote_url: remoteUrl } };
+      if (p.change_ids.length && commitKeys.length) {
+        const commitUrl = commitUrlFromRemote(remoteUrl, sha);
+        triggers.push({
+          trigger: 'commit.linked',
+          input: {
+            tenant_id: t,
+            project_id: ev.project_id,
+            task_keys: commitKeys,
+            ref: `commit:${ev.repository}:${sha}`,
+            vars: { sha, repository: ev.repository, ...(commitUrl ? { commit_url: commitUrl } : {}) },
+          },
+        });
+      }
       // Cambios incluidos → committed (se crean como "stub" si el accepted aún no llegó).
       for (const changeId of new Set(p.change_ids)) {
         const ref = changeRef(ev.session_id, changeId);
         const status = nextChangeStatus(pre.changes.get(ref), 'committed');
         linked.push(
           update(table, keys.change(t, ev.session_id, changeId), {
-            set: { status, status_rank: RANK[status], commit_sha: p.sha.toLowerCase(), updated_at: now },
+            set: { status, status_rank: RANK[status], commit_sha: sha, updated_at: now },
             setIfNotExists: { ...changeBase(changeId), committed_at: p.committed_at },
           }),
         );
@@ -441,9 +518,13 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
       });
       const deployed = p.kind === 'deployment';
       const touched = new Set<string>(); // un mismo cambio puede venir en 2 commits: 1 sola operación por ítem
+      const refKeys: string[] = [...taskKeys];
+      let remoteUrl: string | undefined;
       for (const sha of new Set(p.included_shas.map((s) => s.toLowerCase()))) {
         const commit = pre.commits.get(commitRef(ev.repository, sha));
         if (!commit) continue; // commit desconocido (de otra sesión/no reportado): no se crean stubs
+        refKeys.push(...(commit.task_keys ?? []));
+        remoteUrl ??= commit.remote_url;
         linked.push(
           update(table, keys.commit(t, ev.repository, sha), {
             set: { updated_at: now },
@@ -465,9 +546,24 @@ export function projectEvent(ctx: ProjectionContext, ev: ProductivityEvent, pre:
           changeStatuses.push({ key: ref, status });
         }
       }
+      const tagKeys = filterTaskKeys(refKeys, prefixes);
+      if (tagKeys.length) {
+        const sha = p.sha.toLowerCase();
+        const commitUrl = commitUrlFromRemote(remoteUrl, sha);
+        triggers.push({
+          trigger: 'reference.marked',
+          input: {
+            tenant_id: t,
+            project_id: ev.project_id,
+            task_keys: tagKeys,
+            ref: `ref:${ev.repository}:${p.tag}`,
+            vars: { sha, repository: ev.repository, ...(commitUrl ? { commit_url: commitUrl } : {}) },
+          },
+        });
+      }
       break;
     }
   }
 
-  return { core, linked, changeStatuses };
+  return { core, linked, changeStatuses, triggers, ...(commitOut ? { commit: commitOut } : {}) };
 }

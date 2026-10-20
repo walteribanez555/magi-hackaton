@@ -88,3 +88,47 @@ describe('authMiddleware', () => {
     expect(whoami).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('authMiddleware · modo demo sin login', () => {
+  const withEnv = (vars: Record<string, string | undefined>, fn: () => Promise<void>) => async () => {
+    const prev = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, vars);
+    for (const [k, v] of Object.entries(vars)) if (v === undefined) delete process.env[k];
+    config.reload();
+    try {
+      await fn();
+    } finally {
+      for (const [k, v] of Object.entries(prev)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      config.reload();
+    }
+  };
+
+  it(
+    'sin Authorization usa la key de demo y lo marca en la respuesta',
+    withEnv({ DEMO_OPEN_ACCESS: 'true', DEMO_API_KEY: GOOD, APP_ENV: 'development' }, async () => {
+      const { app } = setup();
+      const res = await app.request('/me');
+      expect(res.status).toBe(200);
+      expect(res.headers.get('x-magicode-demo')).toBe('true');
+      expect(await res.json()).toMatchObject({ tenant: 'demo-tenant', hasKey: true });
+    }),
+  );
+
+  it(
+    'nunca se habilita en production',
+    withEnv({ DEMO_OPEN_ACCESS: 'true', DEMO_API_KEY: GOOD, APP_ENV: 'production' }, async () => {
+      const { app } = setup();
+      expect((await app.request('/me')).status).toBe(401);
+    }),
+  );
+
+  it(
+    'con Authorization explícito se respeta la key enviada',
+    withEnv({ DEMO_OPEN_ACCESS: 'true', DEMO_API_KEY: GOOD, APP_ENV: 'development' }, async () => {
+      const { app } = setup();
+      const res = await app.request('/me', auth('mh_bad'));
+      expect(res.status).toBe(401);
+      expect(res.headers.get('x-magicode-demo')).toBeNull();
+    }),
+  );
+});

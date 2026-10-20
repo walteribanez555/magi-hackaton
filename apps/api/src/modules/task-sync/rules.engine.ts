@@ -52,10 +52,24 @@ export function matchesWhen(rule: AutomationRule, ctx: RuleContext): string | nu
   return null;
 }
 
+const isAbsoluteHttpUrl = (u: string): boolean => {
+  if (!/^https?:\/\//i.test(u)) return false;
+  try {
+    new URL(u);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const COMMIT_URL_UNKNOWN = 'commit_url desconocido';
+
 /**
  * Motor de reglas PURO: dado un disparo, qué acciones encolar.
  * - solo reglas `enabled` con el mismo `trigger` y cuyo `when` se cumpla;
- * - plantillas renderizadas y re-validadas con zod (una URL vacía ⇒ regla omitida, no acción rota);
+ * - se renderizan las plantillas y DESPUÉS se valida (zod + URL absoluta http(s) en remote_link);
+ * - remote_link con {{commit_url}} sin remoto conocido ⇒ se encola igual pero `skip_reason`
+ *   (status skipped, last_error "commit_url desconocido") en vez de publicar un enlace roto;
  * - idempotency_key = `${rule_id}:${trigger_ref}` (trigger_ref ya incluye la tarea).
  */
 export function evaluateRules(
@@ -72,18 +86,28 @@ export function evaluateRules(
       skipped.push({ rule_id: rule.rule_id, reason: miss });
       continue;
     }
-    const parsed = TaskAction.safeParse(renderAction(rule.action, vars));
-    if (!parsed.success) {
-      skipped.push({ rule_id: rule.rule_id, reason: `acción inválida tras plantillas: ${parsed.error.issues[0]?.message ?? 'zod'}` });
-      continue;
-    }
-    planned.push({
+    const base = {
       rule_id: rule.rule_id,
       integration_id: rule.integration_id,
       idempotency_key: `${rule.rule_id}:${context.trigger_ref}`,
       trigger_ref: context.trigger_ref,
-      action: parsed.data,
-    });
+    };
+    const rendered = renderAction(rule.action, vars);
+    if (rendered.kind === 'remote_link' && !isAbsoluteHttpUrl(rendered.url)) {
+      if (rule.action.kind === 'remote_link' && rule.action.url.includes('{{commit_url}}')) {
+        // se audita como skipped con la plantilla original (sigue siendo un TaskAction válido)
+        planned.push({ ...base, action: { ...rendered, url: rule.action.url }, skip_reason: COMMIT_URL_UNKNOWN });
+      } else {
+        skipped.push({ rule_id: rule.rule_id, reason: `URL inválida tras plantillas: "${rendered.url}"` });
+      }
+      continue;
+    }
+    const parsed = TaskAction.safeParse(rendered);
+    if (!parsed.success) {
+      skipped.push({ rule_id: rule.rule_id, reason: `acción inválida tras plantillas: ${parsed.error.issues[0]?.message ?? 'zod'}` });
+      continue;
+    }
+    planned.push({ ...base, action: parsed.data });
   }
   return { planned, skipped };
 }
@@ -107,13 +131,22 @@ export function commitUrl(provider: GitProvider | string | undefined, repository
 }
 
 /**
- * Reglas sembradas al guardar credenciales por primera vez = DEFAULT_RULES, salvo que la URL de
- * ejemplo (`https://example.invalid/…`) del remote_link se sustituye por {{commit_url}}.
+ * {{commit_url}} desde el `remote_url` del Commit (lo reporta la extensión):
+ *   https://github.com/org/repo(.git) · git@github.com:org/repo.git · https://user@bitbucket.org/ws/repo.git
+ * GitHub → /commit/<sha> · Bitbucket → /commits/<sha> · GitLab → /-/commit/<sha>. Otro host ⇒ ''.
  */
+export function commitUrlFromRemote(remoteUrl: string | undefined | null, sha: string | undefined): string {
+  if (!remoteUrl || !sha) return '';
+  const m =
+    /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+?)(?:\.git)?\/?$/i.exec(remoteUrl.trim()) ??
+    /^[^@\s]+@([^:]+):(.+?)(?:\.git)?\/?$/.exec(remoteUrl.trim());
+  if (!m) return '';
+  const host = m[1]!.toLowerCase();
+  const provider = host === 'github.com' ? 'github' : host === 'bitbucket.org' ? 'bitbucket' : host === 'gitlab.com' ? 'gitlab' : '';
+  return commitUrl(provider, m[2]!, sha);
+}
+
+/** Reglas sembradas al guardar credenciales por primera vez (copia de DEFAULT_RULES). */
 export function seedRules(): AutomationRuleUpsert[] {
-  return DEFAULT_RULES.map((r) =>
-    r.action.kind === 'remote_link' && r.action.url.includes('example.invalid')
-      ? { ...r, action: { ...r.action, url: '{{commit_url}}' } }
-      : r,
-  );
+  return structuredClone(DEFAULT_RULES);
 }

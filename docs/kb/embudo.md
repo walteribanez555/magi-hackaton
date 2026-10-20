@@ -92,6 +92,7 @@ Lectura: la retención aparente (0.67) está subestimada por la diferencia de un
 
 - **Unidades distintas entre etapas.** `generated` y `accepted` cuentan todas las líneas agregadas no vacías (incluidas las triviales como `}`); `committed`, `in_reference` y `deployed` cuentan hashes únicos de líneas **no triviales** (así lo calcula `matchCommit` y `computeSurvival`). La retención en Git y la supervivencia salen, por tanto, sesgadas hacia abajo en la proporción de triviales del cambio (25 % en el ejemplo). Para comparar etapas, usar `effective_lines` (las triviales pesan 0 y no sufren el sesgo).
 - `deployed` por webhook solo casa si el SHA desplegado es el **mismo** SHA del commit de la sesión (comparación por prefijo). Un despliegue del commit de merge o de un squash no se detecta como despliegue de esas líneas; en ese caso se debe emitir `reference.marked` con `kind = deployment`, `evidence_url` y las líneas sobrevivientes en el SHA desplegado.
+- `counts.deployments_success` cuenta solo los Deployment `success` cuyo SHA coincide con un commit del alcance; el mismo criterio que la etapa `deployed`.
 - Los cambios aceptados que se descartan por completo antes del commit no suman `ai_lost_lines`; solo se ven como diferencia entre `accepted` y `committed`.
 - Un commit con líneas IA de varias sesiones se atribuye a la sesión del evento `git.committed`.
 - La etapa `generated` no pondera nada: es volumen bruto de propuestas.

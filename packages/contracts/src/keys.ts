@@ -12,7 +12,8 @@
  * | Change        | T#{t}#S#{session}          | C#{change_id}                   | –                       | –                            |
  * | Commit        | T#{t}#REPO#{repo}          | COMMIT#{sha}                    | T#{t}#S#{session}       | COMMIT#{committed_at}        |
  * | Reference     | T#{t}#REPO#{repo}          | REF#{tag}                       | –                       | –                            |
- * | UsageSnapshot | T#{t}#K#{key}              | U#{granularity}#{window_start}  | –                       | –                            |
+ * | UsageSnapshot | T#{t}#K#{key}              | U#{granularity}#{window_start}#{suffix} | –               | –                            |
+ * | UsageMarker   | T#{t}#K#{key}              | U#sync#latest                   | –                       | –   (entity UsageSnapshot, kind=sync-marker) |
  * | Task          | T#{t}#TASK#{key}           | META                            | T#{t}#P#{project}       | TASK#{updated_at}            |
  * | TaskLink      | T#{t}#TASK#{key}           | L#{kind}#{id}                   | –                       | –                            |
  * | Branch        | T#{t}#REPO#{repo}          | BRANCH#{name}                   | T#{t}#P#{project}       | BRANCH#{last_activity_at}    |
@@ -26,10 +27,32 @@
  * | ActionIdem    | T#{t}#IDEM#{idempotency_key} | IDEM                          | –                       | –  (TTL 7 d)                 |
  * | AutomationRule| T#{t}#INT#{integration}    | RULE#{rule_id}                  | –                       | –                            |
  *
+ * | IntHealth     | T#{t}#INT#{integration}    | HEALTH                          | –                       | –   (contadores 24 h, último error, last_event_at) |
+ * | IntHealthBucket | T#{t}#INT#{integration}  | HEALTH#H#{yyyy-mm-ddThh}        | –                       | –   (contador horario por outcome, TTL `expires_at` 3 d) |
+ * | IntTestRun    | T#{t}#INT#{integration}    | TEST#{started_at}#{test_id}     | –                       | –   (TTL 30 d)               |
+ *
  * OutboxAction: el stream (filtro entity=OutboxAction ∧ status=pending) dispara task-sync.
  * TaskLink.kind ∈ branch | session | commit | pr | deployment — permite reconstruir todo lo de una tarea
  * con UN Query sobre PK = T#{t}#TASK#{key}. IntLookup resuelve tenant + secreto desde la URL del webhook
  * (el secreto se guarda cifrado en reposo por DynamoDB; ver docs/integrations.md).
+ *
+ * UsageSnapshot: `suffix` = `{request_id|unknown}` con granularity=request (window_start es el
+ * instante de la petición) y `{model|all}` con hour/day (MagiHub puede desglosar por modelo). El
+ * marcador de cobertura (`U#sync#latest`: granularity, covered_from/to, synced_at,
+ * request_unsupported, ingestion_delay_minutes) comparte la partición; se excluye de las lecturas
+ * por prefijo `U#{granularity}#`.
+ *
+ * Atributos extra de Commit (además de los del evento git.committed):
+ *  - verified_remote, remote_pushed_at, remote_branch, remote_files, remote_author_login,
+ *    remote_session_id: los escribe el webhook push; la proyección del IDE (UpdateItem) NUNCA los pisa.
+ *  - remote_only: el push llegó antes que el IDE (commit mínimo sin automation real);
+ *    ide_reported_at: el IDE lo reportó después (automation pasa a ser válida).
+ *  - task_keys: unión de claves del IDE (rama/envelope) y del push (mensaje/rama), filtradas por prefijos.
+ *  - reference_tags: Set con los tags de reference.marked que lo incluyen.
+ * Atributos extra de IntLookup: provider_hook_id (id del webhook en el proveedor), pending_test
+ * (prueba de ida y vuelta en curso), service_account_id y managed_field_ids (write-back: anti-bucle),
+ * credentials_configured_at.
+ * Session guarda key_fingerprint (sha256(key)[:12]) y key_name de la identidad MagiHub — nunca la key.
  *
  * Todas las entidades llevan `entity` (nombre de la fila de arriba), `tenant_id`, `key_id`,
  * `created_at`, `updated_at` y `provenance`.
@@ -56,6 +79,8 @@ export const ENTITY = {
   outboxAction: 'OutboxAction',
   actionIdem: 'ActionIdem',
   automationRule: 'AutomationRule',
+  integrationHealth: 'IntHealth',
+  integrationTestRun: 'IntTestRun',
 } as const;
 export type EntityName = (typeof ENTITY)[keyof typeof ENTITY];
 
@@ -151,6 +176,11 @@ export const keys = {
     GSI1SK: createdAt,
   }),
   actionIdem: (t: string, idempotencyKey: string) => ({ PK: `T#${enc(t)}#IDEM#${enc(idempotencyKey)}`, SK: 'IDEM' }),
+  integrationHealth: (t: string, integrationId: string) => ({ PK: `T#${enc(t)}#INT#${integrationId}`, SK: 'HEALTH' }),
+  integrationTestRun: (t: string, integrationId: string, startedAt: string, testId: string) => ({
+    PK: `T#${enc(t)}#INT#${integrationId}`,
+    SK: `TEST#${startedAt}#${testId}`,
+  }),
   automationRule: (t: string, integrationId: string, ruleId: string) => ({
     PK: `T#${enc(t)}#INT#${integrationId}`,
     SK: `RULE#${ruleId}`,

@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { z } from 'zod';
+import { ZodError } from 'zod';
 import {
   AutomationRuleUpsert,
+  GitProvider,
+  GitProviderCredentials,
   keys,
-  TaskAction,
   TaskActionRequest,
   TaskKey,
   TaskProvider,
@@ -12,6 +13,7 @@ import {
   type AvailableTransition,
   type OutboxAction,
   type RuleTrigger,
+  type TaskAction,
 } from '@magicode/contracts';
 import { createLogger } from '../../config/logger';
 import {
@@ -26,15 +28,17 @@ import type { CallerScope, IntegrationItem } from '../integrations/integrations.
 import { tasksRepository, type TasksRepository } from '../tasks/tasks.repository';
 import { tasksService, type TasksService } from '../tasks/tasks.service';
 import { DEFAULT_STORY_POINTS_FIELD } from '../webhooks/adapters/jira.adapter';
-import { credentialsStore, type CredentialsStore } from './credentials.store';
+import { hookApiFor } from '../integration-health/provider-hooks.client';
+import { credentialsStore, isTaskCredentials, type CredentialsStore } from './credentials.store';
 import { JiraClient } from './jira.client';
 import { LinearClient } from './linear.client';
 import { ProviderError, type HttpOptions } from './provider-http';
-import { evaluateRules, needsMetrics, renderAction, seedRules, triggerRefFor } from './rules.engine';
+import { commitUrlFromRemote, evaluateRules, needsMetrics, seedRules, triggerRefFor } from './rules.engine';
 import { taskSyncRepository, type TaskSyncRepository } from './task-sync.repository';
 import type {
   AutomationRuleItem,
   OutboxItem,
+  RuleVars,
   TaskProviderClient,
   TriggerInput,
 } from './task-sync.types';
@@ -54,26 +58,9 @@ export class RetryableOutboxError extends Error {
 const newActionId = () => `act_${randomBytes(8).toString('hex')}`;
 const newRuleId = () => `rule_${randomBytes(6).toString('hex')}`;
 
-/** Valores de ejemplo para validar acciones con plantillas ({{commit_url}} no es una URL hasta renderizar). */
-const SAMPLE_VARS = {
-  task_key: 'MAG-1',
-  sha: '0123456789abcdef0123456789abcdef01234567',
-  pr_url: 'https://example.com/pr/1',
-  environment: 'production',
-  tokens: 1000,
-  effective_lines: 10,
-  criticality: 'low',
-  dashboard_url: 'https://example.com/tasks/MAG-1',
-  commit_url: 'https://example.com/commit/0123456789ab',
-  repository: 'org/repo',
-};
-
-/** AutomationRuleUpsert admitiendo plantillas: la acción se valida tras renderizar con valores de ejemplo. */
+/** AutomationRuleUpsert (la URL de remote_link admite plantillas {{…}}; se valida absoluta al disparar). */
 export function parseRuleUpsert(body: unknown): AutomationRuleUpsert {
-  const shape = AutomationRuleUpsert.omit({ action: true }).extend({ action: z.record(z.string(), z.unknown()) });
-  const parsed = shape.parse(body);
-  TaskAction.parse(renderAction(parsed.action as TaskAction, SAMPLE_VARS));
-  return parsed as AutomationRuleUpsert;
+  return AutomationRuleUpsert.parse(body);
 }
 
 export function toOutboxAction(i: OutboxItem): OutboxAction {
@@ -130,8 +117,10 @@ export class TaskSyncService {
   private readonly credentials: CredentialsStore;
   private readonly now: () => Date;
   private readonly makeClient: (creds: TaskProviderCredentials) => TaskProviderClient;
+  private readonly http: HttpOptions;
 
   constructor(deps: TaskSyncDeps = {}) {
+    this.http = deps.http ?? {};
     this.repo = deps.repo ?? taskSyncRepository;
     this.integrations = deps.integrations ?? integrationsRepository;
     this.tasks = deps.tasks ?? tasksRepository;
@@ -172,7 +161,9 @@ export class TaskSyncService {
 
   private async clientForIntegration(integrationId: string): Promise<TaskProviderClient> {
     const creds = await this.credentials.get(integrationId);
-    if (!creds) throw new UnprocessableException('La integración no tiene credenciales de write-back', 'CREDENTIALS_MISSING');
+    if (!creds || !isTaskCredentials(creds)) {
+      throw new UnprocessableException('La integración no tiene credenciales de write-back', 'CREDENTIALS_MISSING');
+    }
     return this.makeClient(creds);
   }
 
@@ -193,13 +184,16 @@ export class TaskSyncService {
     action: TaskAction;
     origin: OutboxAction['origin'];
     idempotency_key: string;
+    /** se registra directamente como skipped (auditoría) y el stream no lo procesa */
+    skip_reason?: string;
   }): Promise<{ item: OutboxAction; duplicate: boolean }> {
     const at = this.now();
+    const status = input.skip_reason ? 'skipped' : 'pending';
     const createdAt = at.toISOString();
     const actionId = newActionId();
     const item: OutboxItem = {
       ...keys.outboxAction(input.tenant_id, input.task_key, createdAt, actionId),
-      ...keys.outboxGsi1(input.tenant_id, 'pending', createdAt),
+      ...keys.outboxGsi1(input.tenant_id, status, createdAt),
       entity: 'OutboxAction',
       action_id: actionId,
       tenant_id: input.tenant_id,
@@ -211,9 +205,9 @@ export class TaskSyncService {
       action: input.action,
       origin: input.origin,
       idempotency_key: input.idempotency_key,
-      status: 'pending',
+      status,
       attempts: 0,
-      last_error: null,
+      last_error: input.skip_reason ?? null,
       result: null,
       created_at: createdAt,
       updated_at: createdAt,
@@ -278,7 +272,16 @@ export class TaskSyncService {
   }
 
   /** PUT /integrations/:id/credentials → verifica contra el proveedor, guarda en Secrets Manager, 204. */
+  /**
+   * PUT /integrations/:id/credentials → verifica contra el proveedor, guarda en Secrets Manager, 204.
+   * Jira/Linear: TaskProviderCredentials (write-back). GitHub/Bitbucket/GitLab: GitProviderCredentials
+   * (verificar/registrar el webhook, ping, historial de entregas).
+   */
   async saveCredentials(scope: CallerScope, integrationId: string, body: unknown): Promise<void> {
+    const found = await this.integrations.get(scope.tenant_id, integrationId);
+    if (found && found.status !== 'disabled' && GitProvider.safeParse(found.provider).success) {
+      return this.saveGitCredentials(scope, found, body);
+    }
     const integ = await this.ownTaskIntegration(scope.tenant_id, integrationId);
     const creds = TaskProviderCredentials.parse(body);
     if (creds.provider !== integ.provider) {
@@ -321,6 +324,33 @@ export class TaskSyncService {
       for (const r of seedRules()) await this.createRule(scope, integrationId, r, false);
     }
     logger.info('Credenciales de write-back guardadas', { tenant_id: scope.tenant_id, integration_id: integrationId, provider: creds.provider });
+  }
+
+  /** Credenciales git: GET repo + GET hooks (permiso de webhooks) antes de guardarlas. */
+  private async saveGitCredentials(scope: CallerScope, integ: IntegrationItem, body: unknown): Promise<void> {
+    const creds = GitProviderCredentials.parse(body);
+    if (creds.provider !== integ.provider) {
+      throw new BadRequestException('Las credenciales no corresponden al proveedor de la integración', 'PROVIDER_MISMATCH');
+    }
+    const api = hookApiFor(creds, integ, this.http);
+    if (!api) throw new BadRequestException('La integración no tiene repositorio configurado', 'NO_REPOSITORY');
+    try {
+      await api.verify();
+    } catch (err) {
+      if (err instanceof ProviderError && (err.status === 401 || err.status === 403 || err.status === 404)) {
+        throw new UnprocessableException(
+          err.status === 404
+            ? `El token no ve el repositorio ${integ.repository} (¿nombre correcto y acceso al repo?)`
+            : 'El proveedor rechazó las credenciales o faltan permisos de webhooks',
+          'CREDENTIALS_REJECTED',
+        );
+      }
+      if (err instanceof ProviderError) throw new BadGatewayException('No se pudo verificar las credenciales con el proveedor', 'GIT_PROVIDER_ERROR');
+      throw err;
+    }
+    await this.credentials.save(integ.integration_id, scope.tenant_id, creds);
+    await this.repo.markCredentials(scope.tenant_id, integ.integration_id, { managed_field_ids: [] }, this.now().toISOString());
+    logger.info('Credenciales git guardadas', { tenant_id: scope.tenant_id, integration_id: integ.integration_id, provider: creds.provider });
   }
 
   // ── reglas ────────────────────────────────────────────────────────────────
@@ -395,11 +425,17 @@ export class TaskSyncService {
         const rules = (await rulesP).filter((r) => r.enabled && r.trigger === trigger);
         if (!rules.length) continue;
 
-        const vars = {
+        const vars: RuleVars = {
           ...(input.vars ?? {}),
           ...(input.environment ? { environment: input.environment } : {}),
           ...(dashboard ? { dashboard_url: `${dashboard}/tasks/${encodeURIComponent(taskKey)}` } : {}),
         };
+        // {{commit_url}}: primero el remote_url del Commit (lo reporta la extensión); si no, el del webhook
+        if (vars.sha && vars.repository && JSON.stringify(rules).includes('{{commit_url}}')) {
+          const [commit] = await this.tasks.commits(input.tenant_id, [{ repository: String(vars.repository), sha: String(vars.sha) }]);
+          const fromRemote = commitUrlFromRemote(commit?.remote_url as string | undefined, String(vars.sha));
+          if (fromRemote) vars.commit_url = fromRemote;
+        }
         if (needsMetrics(rules)) {
           const { metrics } = await this.taskMetrics.metricsFor(input.tenant_id, taskKey);
           Object.assign(vars, {
@@ -427,6 +463,7 @@ export class TaskSyncService {
             action: p.action,
             origin: { type: 'rule', rule_id: p.rule_id, trigger_ref: p.trigger_ref },
             idempotency_key: p.idempotency_key,
+            ...(p.skip_reason ? { skip_reason: p.skip_reason } : {}),
           });
           logger.info('Regla disparada', { tenant_id: input.tenant_id, trigger, task_key: taskKey, rule_id: p.rule_id, duplicate: res.duplicate });
         }
@@ -463,7 +500,7 @@ export class TaskSyncService {
         return await fail('Integración deshabilitada o inexistente');
       }
       const creds = await this.credentials.get(item.integration_id);
-      if (!creds) return await fail('La integración no tiene credenciales de write-back');
+      if (!creds || !isTaskCredentials(creds)) return await fail('La integración no tiene credenciales de write-back');
       const res = await this.makeClient(creds).execute(item.task_key, item.action, item.action_id);
       await this.repo.finish(item, res.status, { result: res.result, last_error: null }, this.now());
       if (res.task_status) {
@@ -472,7 +509,7 @@ export class TaskSyncService {
       log.info('Acción enviada', { status: res.status, attempts: item.attempts });
       return res.status;
     } catch (err) {
-      const transient = err instanceof ProviderError ? err.transient : !(err instanceof z.ZodError);
+      const transient = err instanceof ProviderError ? err.transient : !(err instanceof ZodError);
       const message = err instanceof Error ? `${err.name === 'ProviderError' ? '' : `${err.name}: `}${err.message}` : String(err);
       if (transient && item.attempts < MAX_ATTEMPTS) {
         await this.repo.finish(item, 'pending', { last_error: message.slice(0, 500) }, this.now());
